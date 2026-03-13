@@ -1,0 +1,65 @@
+version: '3.8'
+
+services:
+  gateway:
+    build: .
+    container_name: andex-gateway
+    ports:
+      - "3001:3001"
+    environment:
+      - NODE_ENV=production
+      - PORT=3001
+      - CENTRO_NOMBRE=${CENTRO_NOMBRE:-Mi Centro Médico}
+      - CENTRO_ID=${CENTRO_ID:-centro-001}
+      - API_KEY=${API_KEY:-change-this-api-key}
+      - DASHBOARD_USER=${DASHBOARD_USER:-admin}
+      - DASHBOARD_PASSWORD=${DASHBOARD_PASSWORD:-admin123}
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-https://andexreports.app}
+      - ORTHANC_URL=http://orthanc:8042
+      - ORTHANC_USERNAME=${ORTHANC_USERNAME:-}
+      - ORTHANC_PASSWORD=${ORTHANC_PASSWORD:-}
+      - RETRY_INTERVAL_MS=60000
+      - MAX_RETRY_ATTEMPTS=5
+      - CLEANUP_AFTER_HOURS=24
+    volumes:
+      - gateway-data:/app/data
+    depends_on:
+      orthanc:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - andex-network
+
+  orthanc:
+    image: orthancteam/orthanc:latest
+    container_name: andex-orthanc
+    ports:
+      - "8042:8042"   # HTTP/REST API
+      - "4242:4242"   # DICOM
+    environment:
+      - ORTHANC__NAME=AndexOrthanc
+      - ORTHANC__REMOTE_ACCESS_ALLOWED=true
+      - ORTHANC__AUTHENTICATION_ENABLED=${ORTHANC_AUTH_ENABLED:-false}
+      - ORTHANC__REGISTERED_USERS=${ORTHANC_USERS:-}
+      - DICOM_WEB_PLUGIN_ENABLED=true
+    volumes:
+      - orthanc-data:/var/lib/orthanc/db
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8042/system"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - andex-network
+
+volumes:
+  gateway-data:
+    driver: local
+  orthanc-data:
+    driver: local
+
+networks:
+  andex-network:
+    driver: bridge

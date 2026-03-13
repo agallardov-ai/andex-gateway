@@ -1,0 +1,43 @@
+{
+  "name": "andex-gateway",
+  "version": "1.0.0",
+  "description": "Bridge service between Andex Reports PWA and Orthanc/PACS",
+  "main": "dist/index.js",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "lint": "eslint src/**/*.ts"
+  },
+  "keywords": [
+    "dicom",
+    "pacs",
+    "orthanc",
+    "medical",
+    "gateway"
+  ],
+  "author": "Andex Medical",
+  "license": "MIT",
+  "dependencies": {
+    "@fastify/cors": "^9.0.1",
+    "@fastify/multipart": "^8.1.0",
+    "@fastify/rate-limit": "^9.1.0",
+    "@fastify/static": "^7.0.1",
+    "dotenv": "^16.4.5",
+    "fastify": "^4.26.2",
+    "pino-pretty": "^11.0.0",
+    "sql.js": "^1.10.3",
+    "uuid": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.24",
+    "@types/sql.js": "^1.4.9",
+    "@types/uuid": "^9.0.8",
+    "tsx": "^4.7.1",
+    "typescript": "^5.3.3"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
