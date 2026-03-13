@@ -2,22 +2,73 @@ import fs from 'fs';
 import path from 'path';
 import { config } from '../config/env.js';
 
-// Ensure pending directory exists
+// Storage paths
+const STORAGE_PATHS = {
+  incoming: path.join(config.dataDir, 'incoming'),   // Archivos recién recibidos
+  pending: path.join(config.dataDir, 'pending'),     // En cola de envío
+  processed: path.join(config.dataDir, 'processed'), // Enviados exitosamente
+  failed: path.join(config.dataDir, 'failed'),       // Fallidos (para retry manual)
+  logs: path.join(config.dataDir, 'logs'),           // Logs persistentes
+};
+
+// Ensure all storage directories exist
 export function initStorage(): void {
-  if (!fs.existsSync(config.pendingDir)) {
-    fs.mkdirSync(config.pendingDir, { recursive: true });
-    console.log(`✅ Storage initialized: ${config.pendingDir}`);
-  }
+  Object.entries(STORAGE_PATHS).forEach(([name, dir]) => {
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+      console.log(`📁 Storage initialized: ${name} → ${dir}`);
+    }
+  });
+  console.log('✅ Storage ready');
 }
 
-// Save uploaded file to pending directory
+// Get storage path by type
+export function getStoragePath(type: keyof typeof STORAGE_PATHS): string {
+  return STORAGE_PATHS[type];
+}
+
+// Save uploaded file to incoming directory
 export async function saveFile(filename: string, data: Buffer): Promise<string> {
   const timestamp = Date.now();
   const safeFilename = `${timestamp}_${filename.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
-  const filepath = path.join(config.pendingDir, safeFilename);
+  const filepath = path.join(STORAGE_PATHS.incoming, safeFilename);
   
   await fs.promises.writeFile(filepath, data);
   return filepath;
+}
+
+// Move file between storage directories
+export async function moveFile(
+  filepath: string, 
+  destination: 'pending' | 'processed' | 'failed'
+): Promise<string> {
+  const filename = path.basename(filepath);
+  const newPath = path.join(STORAGE_PATHS[destination], filename);
+  
+  try {
+    await fs.promises.rename(filepath, newPath);
+    return newPath;
+  } catch (error) {
+    // Si rename falla (cross-device), copiar y eliminar
+    await fs.promises.copyFile(filepath, newPath);
+    await fs.promises.unlink(filepath);
+    return newPath;
+  }
+}
+
+// Move to pending (from incoming)
+export async function moveToPending(filepath: string): Promise<string> {
+  return moveFile(filepath, 'pending');
+}
+
+// Move to processed (upload successful)
+export async function moveToProcessed(filepath: string): Promise<string> {
+  return moveFile(filepath, 'processed');
+}
+
+// Move to failed (upload failed after max retries)
+export async function moveToFailed(filepath: string): Promise<string> {
+  return moveFile(filepath, 'failed');
 }
 
 // Delete a file from storage

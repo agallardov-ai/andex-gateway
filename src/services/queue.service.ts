@@ -8,7 +8,7 @@ import {
 } from '../db/database.js';
 import { uploadToPacs } from './pacs.service.js';
 import { recordPacsRequest, recordRetry, recordExpiredJob, log } from './observability.service.js';
-import { deleteFile, fileExists } from './storage.service.js';
+import { fileExists, moveToProcessed, moveToFailed } from './storage.service.js';
 import type { Job } from '../types/index.js';
 
 let retryInterval: NodeJS.Timeout | null = null;
@@ -45,12 +45,18 @@ export async function processJob(job: Job): Promise<boolean> {
       sent_at: new Date().toISOString()
     });
     
-    // Delete local file after successful upload
-    await deleteFile(job.filepath);
+    // Move file to processed folder after successful upload
+    await moveToProcessed(job.filepath);
     return true;
   } else {
     log('error', `Job failed`, { jobId: job.id, error: result.error, latency });
     updateJobStatus(job.id, 'failed', { error_message: result.error });
+    
+    // If max attempts reached, move to failed folder
+    if (job.attempts + 1 >= job.max_attempts) {
+      log('warn', `Job exceeded max attempts, moving to failed`, { jobId: job.id, attempts: job.attempts + 1 });
+      await moveToFailed(job.filepath);
+    }
     return false;
   }
 }

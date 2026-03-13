@@ -234,6 +234,9 @@ export function getMetricsJson(): object {
 // STRUCTURED LOGGING
 // ============================================
 
+import fs from 'fs';
+import path from 'path';
+
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
 interface LogEntry {
@@ -246,6 +249,23 @@ interface LogEntry {
 
 const logBuffer: LogEntry[] = [];
 const MAX_LOG_BUFFER = 1000;
+
+// Log file path (daily rotation)
+function getLogFilePath(): string {
+  const date = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+  const logsDir = process.env.DATA_DIR ? `${process.env.DATA_DIR}/logs` : './data/logs';
+  return path.join(logsDir, `gateway-${date}.log`);
+}
+
+// Write log to file
+function writeLogToFile(entry: LogEntry): void {
+  try {
+    const logLine = JSON.stringify(entry) + '\n';
+    fs.appendFileSync(getLogFilePath(), logLine);
+  } catch (error) {
+    // Silently fail file logging to avoid infinite loops
+  }
+}
 
 export function log(level: LogLevel, message: string, context?: Record<string, unknown>): void {
   const entry: LogEntry = {
@@ -260,6 +280,9 @@ export function log(level: LogLevel, message: string, context?: Record<string, u
   if (logBuffer.length > MAX_LOG_BUFFER) {
     logBuffer.shift();
   }
+
+  // Persist to file
+  writeLogToFile(entry);
 
   // Console output (structured)
   const emoji = {

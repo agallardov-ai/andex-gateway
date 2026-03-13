@@ -7,6 +7,7 @@ import { config } from './config/env.js';
 import { initDatabase } from './db/database.js';
 import { initStorage } from './services/storage.service.js';
 import { startRetryWorker, startCleanupWorker, stopWorkers } from './services/queue.service.js';
+import { startWorklistPolling, stopWorklistPolling } from './services/worklist-polling.service.js';
 import { dicomRoutes } from './routes/dicom.routes.js';
 import { healthRoutes } from './routes/health.routes.js';
 import { uiRoutes } from './routes/ui.routes.js';
@@ -69,6 +70,7 @@ async function registerRoutes() {
 async function shutdown() {
   console.log('\n⏹️ Shutting down...');
   stopWorkers();
+  stopWorklistPolling();
   await fastify.close();
   process.exit(0);
 }
@@ -96,6 +98,7 @@ async function start() {
     // Start background workers
     startRetryWorker();
     startCleanupWorker();
+    startWorklistPolling();
 
     // Start server
     await fastify.listen({ 
