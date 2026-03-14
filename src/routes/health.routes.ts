@@ -53,7 +53,7 @@ export async function healthRoutes(fastify: FastifyInstance): Promise<void> {
       },
     };
 
-    const httpStatus = pacsStatus.ok ? 200 : 503;
+    const httpStatus = 200; // Gateway siempre OK, cliente verifica gateway.status
     return reply.code(httpStatus).send(health);
   });
 
