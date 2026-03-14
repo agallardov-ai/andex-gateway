@@ -134,6 +134,7 @@ export function extractDicomInfo(data: Buffer): {
   patientId?: string;
   patientName?: string;
   modality?: string;
+  accessionNumber?: string;
 } {
   const result: ReturnType<typeof extractDicomInfo> = {};
   
@@ -143,45 +144,75 @@ export function extractDicomInfo(data: Buffer): {
     const magic = data.slice(128, 132).toString('ascii');
     if (magic !== 'DICM') return result;
 
-    // Simple tag extraction (not a full DICOM parser)
-    // This is a minimal implementation - for production, use dcmjs or similar
-    const dataStr = data.toString('latin1');
-    
-    // Patient Name (0010,0010)
-    const patientNameMatch = dataStr.match(/\x10\x00\x10\x00.{4}([^\x00]{1,64})/);
-    if (patientNameMatch) {
-      result.patientName = patientNameMatch[1].trim();
+    // Helper to find DICOM tag value
+    // DICOM tags are little-endian: (0010,0020) is stored as 10 00 20 00
+    function findTagValue(group: number, element: number, maxLen: number = 64): string | null {
+      // Search for tag in little-endian format
+      const groupLow = group & 0xFF;
+      const groupHigh = (group >> 8) & 0xFF;
+      const elemLow = element & 0xFF;
+      const elemHigh = (element >> 8) & 0xFF;
+      
+      for (let i = 132; i < data.length - 10; i++) {
+        if (data[i] === groupLow && 
+            data[i+1] === groupHigh && 
+            data[i+2] === elemLow && 
+            data[i+3] === elemHigh) {
+          // Found tag, now get VR and length
+          // Could be explicit VR (2 bytes VR + 2 bytes length) or implicit
+          const vr = String.fromCharCode(data[i+4], data[i+5]);
+          let offset = 8; // Default for explicit VR short form
+          let len = data.readUInt16LE(i + 6);
+          
+          // Check if explicit VR with 4-byte length (OB, OW, OF, SQ, UC, UR, UT, UN)
+          if (['OB', 'OW', 'OF', 'SQ', 'UC', 'UR', 'UT', 'UN'].includes(vr)) {
+            offset = 12;
+            len = data.readUInt32LE(i + 8);
+          }
+          // Check if implicit VR (length at offset 4)
+          else if (!vr.match(/^[A-Z]{2}$/)) {
+            offset = 8;
+            len = data.readUInt32LE(i + 4);
+          }
+          
+          if (len > 0 && len <= maxLen && i + offset + len <= data.length) {
+            let value = data.slice(i + offset, i + offset + len).toString('latin1');
+            // Clean null bytes and trim
+            value = value.replace(/\x00/g, '').trim();
+            if (value.length > 0) return value;
+          }
+        }
+      }
+      return null;
     }
+
+    // Patient Name (0010,0010)
+    const patientName = findTagValue(0x0010, 0x0010);
+    if (patientName) result.patientName = patientName;
 
     // Patient ID (0010,0020)
-    const patientIdMatch = dataStr.match(/\x10\x00\x20\x00.{4}([^\x00]{1,64})/);
-    if (patientIdMatch) {
-      result.patientId = patientIdMatch[1].trim();
-    }
+    const patientId = findTagValue(0x0010, 0x0020);
+    if (patientId) result.patientId = patientId;
 
     // Modality (0008,0060)
-    const modalityMatch = dataStr.match(/\x08\x00\x60\x00.{4}([A-Z]{2,4})/);
-    if (modalityMatch) {
-      result.modality = modalityMatch[1].trim();
-    }
+    const modality = findTagValue(0x0008, 0x0060, 16);
+    if (modality) result.modality = modality;
+
+    // Accession Number (0008,0050)
+    const accessionNumber = findTagValue(0x0008, 0x0050);
+    if (accessionNumber) result.accessionNumber = accessionNumber;
 
     // Study Instance UID (0020,000D)
-    const studyUIDMatch = dataStr.match(/\x20\x00\x0D\x00.{4}([\d.]{10,64})/);
-    if (studyUIDMatch) {
-      result.studyUID = studyUIDMatch[1].trim();
-    }
+    const studyUID = findTagValue(0x0020, 0x000D, 128);
+    if (studyUID) result.studyUID = studyUID;
 
     // Series Instance UID (0020,000E)
-    const seriesUIDMatch = dataStr.match(/\x20\x00\x0E\x00.{4}([\d.]{10,64})/);
-    if (seriesUIDMatch) {
-      result.seriesUID = seriesUIDMatch[1].trim();
-    }
+    const seriesUID = findTagValue(0x0020, 0x000E, 128);
+    if (seriesUID) result.seriesUID = seriesUID;
 
     // SOP Instance UID (0008,0018)
-    const sopUIDMatch = dataStr.match(/\x08\x00\x18\x00.{4}([\d.]{10,64})/);
-    if (sopUIDMatch) {
-      result.sopInstanceUID = sopUIDMatch[1].trim();
-    }
+    const sopInstanceUID = findTagValue(0x0008, 0x0018, 128);
+    if (sopInstanceUID) result.sopInstanceUID = sopInstanceUID;
 
   } catch (error) {
     console.warn('Error extracting DICOM info:', error);

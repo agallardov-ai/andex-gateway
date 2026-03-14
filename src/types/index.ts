@@ -42,18 +42,42 @@ export interface OrthancResponse {
   ParentSeries?: string;
 }
 
+export interface PacsStatus {
+  status: 'ok' | 'error' | 'unknown';
+  type: 'orthanc' | 'dicomweb';
+  url: string;
+  version?: string;
+  capabilities?: string[];
+  error?: string;
+}
+
+export interface QueueStatus {
+  status: 'ok' | 'error';
+  jobsTotal: number;
+  jobsPending: number;
+  jobsFailed: number;
+  jobsSending?: number;
+  jobsSent?: number;
+}
+
 export interface HealthStatus {
   gateway: {
     status: 'ok' | 'error';
     uptime: number;
     version: string;
   };
+  // New unified PACS status
+  pacs: PacsStatus;
+  // Separate queue status
+  queue: QueueStatus;
+  // Legacy orthanc field for backwards compatibility
   orthanc: {
     status: 'ok' | 'error' | 'unknown';
     url: string;
     version?: string;
     error?: string;
   };
+  // Legacy database field (maps to queue)
   database: {
     status: 'ok' | 'error';
     jobsTotal: number;
@@ -76,4 +100,49 @@ export interface UploadResponse {
   jobId: string;
   message: string;
   status: JobStatus;
+}
+
+// Config types
+export interface DicomWebPaths {
+  stow: string;
+  qido: string;
+  wado: string;
+}
+
+export interface WorklistPaths {
+  ups: string;
+  qidoMwl: string;
+  preferUps: boolean;
+}
+
+export interface GatewayConfig {
+  pacsUrl: string;
+  pacsType: 'orthanc' | 'dicomweb';
+  dicomweb?: DicomWebPaths;
+  worklist?: WorklistPaths;
+}
+
+// Worklist types
+export interface WorklistItem {
+  workitemUid: string;
+  patientId: string;
+  patientName: string;
+  accessionNumber: string;
+  scheduledProcedureStepStartDateTime: string;
+  scheduledStationAETitle?: string;
+  scheduledProcedureStepDescription?: string;
+  modality: string;
+  requestedProcedureId?: string;
+  studyInstanceUid?: string;
+  state?: string;
+}
+
+export interface WorklistQueryParams {
+  patientId?: string;
+  patientName?: string;
+  accessionNumber?: string;
+  scheduledDate?: string;
+  modality?: string;
+  limit?: number;
+  offset?: number;
 }

@@ -7,20 +7,47 @@ services:
     ports:
       - "3001:3001"
     environment:
-      - NODE_ENV=production
+      # Identidad del centro
+      - CENTRO_NOMBRE=${CENTRO_NOMBRE:-Hospital Naval Talcahuano}
+      - CENTRO_ID=${CENTRO_ID:-HOSPTALC}
+      
+      # Gateway
       - PORT=3001
-      - CENTRO_NOMBRE=${CENTRO_NOMBRE:-Mi Centro Médico}
-      - CENTRO_ID=${CENTRO_ID:-centro-001}
-      - API_KEY=${API_KEY:-change-this-api-key}
+      - NODE_ENV=production
+      
+      # Seguridad
+      - API_KEY=${API_KEY:-cambiar-api-key}
       - DASHBOARD_USER=${DASHBOARD_USER:-admin}
       - DASHBOARD_PASSWORD=${DASHBOARD_PASSWORD:-admin123}
-      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-https://andexreports.app}
-      - ORTHANC_URL=http://orthanc:8042
-      - ORTHANC_USERNAME=${ORTHANC_USERNAME:-}
-      - ORTHANC_PASSWORD=${ORTHANC_PASSWORD:-}
-      - RETRY_INTERVAL_MS=60000
-      - MAX_RETRY_ATTEMPTS=5
-      - CLEANUP_AFTER_HOURS=24
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-https://andexreports.app,http://localhost:5173}
+      
+      # PACS (usa Orthanc del compose por defecto)
+      - PACS_TYPE=${PACS_TYPE:-orthanc}
+      - PACS_BASE_URL=${PACS_BASE_URL:-http://orthanc:8042}
+      
+      # DICOMweb endpoints
+      - PACS_STOW_ENDPOINT=${PACS_STOW_ENDPOINT:-/dicomweb/studies}
+      - PACS_QIDO_ENDPOINT=${PACS_QIDO_ENDPOINT:-/dicomweb/studies}
+      - PACS_WADO_ENDPOINT=${PACS_WADO_ENDPOINT:-/dicomweb/studies}
+      
+      # Worklist endpoints
+      - WORKLIST_ENDPOINT=${WORKLIST_ENDPOINT:-/dicomweb/workitems}
+      - WORKLIST_MWL_ENDPOINT=${WORKLIST_MWL_ENDPOINT:-/dicomweb/mwlitems}
+      - WORKLIST_PREFER_UPS=${WORKLIST_PREFER_UPS:-false}
+      - WORKLIST_DEFAULT_MODALITY=${WORKLIST_DEFAULT_MODALITY:-ES}
+      
+      # Autenticación PACS
+      - PACS_AUTH_TYPE=${PACS_AUTH_TYPE:-none}
+      - PACS_USERNAME=${PACS_USERNAME:-}
+      - PACS_PASSWORD=${PACS_PASSWORD:-}
+      
+      # Storage
+      - STORAGE_PATH=/app/data
+      
+      # Queue
+      - QUEUE_RETRY_INTERVAL=${QUEUE_RETRY_INTERVAL:-5000}
+      - QUEUE_MAX_RETRIES=${QUEUE_MAX_RETRIES:-5}
+      - CLEANUP_AFTER_HOURS=${CLEANUP_AFTER_HOURS:-48}
     volumes:
       - gateway-data:/app/data
     depends_on:
@@ -29,19 +56,25 @@ services:
     restart: unless-stopped
     networks:
       - andex-network
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
 
   orthanc:
     image: orthancteam/orthanc:latest
     container_name: andex-orthanc
     ports:
-      - "8042:8042"   # HTTP/REST API
-      - "4242:4242"   # DICOM
+      - "8042:8042"
+      - "4242:4242"
     environment:
       - ORTHANC__NAME=AndexOrthanc
       - ORTHANC__REMOTE_ACCESS_ALLOWED=true
-      - ORTHANC__AUTHENTICATION_ENABLED=${ORTHANC_AUTH_ENABLED:-false}
-      - ORTHANC__REGISTERED_USERS=${ORTHANC_USERS:-}
+      - ORTHANC__AUTHENTICATION_ENABLED=false
       - DICOM_WEB_PLUGIN_ENABLED=true
+      - VERBOSE_ENABLED=true
     volumes:
       - orthanc-data:/var/lib/orthanc/db
     healthcheck:
@@ -56,9 +89,7 @@ services:
 
 volumes:
   gateway-data:
-    driver: local
   orthanc-data:
-    driver: local
 
 networks:
   andex-network:

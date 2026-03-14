@@ -10,6 +10,7 @@
  */
 
 import { config } from '../config/env.js';
+import { generateMockWorklist, filterMockWorklist, getMockWorklistItem } from './worklist-mock.service.js';
 
 // =====================================================
 // TIPOS
@@ -426,8 +427,22 @@ export async function queryWorklist(query: WorklistQuery = {}): Promise<{
   items: WorklistItem[];
   total?: number;
   error?: string;
-  source?: 'ups-rs' | 'qido-mwl';
+  source?: 'ups-rs' | 'qido-mwl' | 'mock';
 }> {
+  // ===== MODO MOCK PARA DESARROLLO =====
+  if (config.worklistMode === 'mock') {
+    console.log('🧪 Worklist en modo MOCK');
+    const allItems = generateMockWorklist();
+    const filteredItems = filterMockWorklist(allItems, query);
+    return {
+      success: true,
+      items: filteredItems,
+      total: filteredItems.length,
+      source: 'mock'
+    };
+  }
+  
+  // ===== MODO PACS (producción) =====
   try {
     // Intentar UPS-RS primero si está configurado
     if (worklistConfig.preferUps) {

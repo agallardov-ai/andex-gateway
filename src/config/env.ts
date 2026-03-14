@@ -5,63 +5,95 @@ export type PacsType = 'orthanc' | 'dicomweb';
 export type AuthType = 'none' | 'basic' | 'bearer';
 
 export const config = {
-  // Server
+  // ===== IDENTIDAD DEL CENTRO =====
+  centroNombre: process.env.CENTRO_NOMBRE || 'Mi Centro Médico',
+  centroId: process.env.CENTRO_ID || 'CENTRO01',
+
+  // ===== GATEWAY =====
   port: parseInt(process.env.PORT || '3001', 10),
   nodeEnv: process.env.NODE_ENV || 'development',
-  
-  // Centro
-  centroNombre: process.env.CENTRO_NOMBRE || 'Mi Centro Medico',
-  centroId: process.env.CENTRO_ID || 'centro-001',
-  
-  // Security
-  apiKey: process.env.API_KEY || 'default-dev-key',
+
+  // ===== SEGURIDAD =====
+  apiKey: process.env.API_KEY || 'dev-api-key-cambiar',
   dashboardUser: process.env.DASHBOARD_USER || 'admin',
   dashboardPassword: process.env.DASHBOARD_PASSWORD || 'admin123',
-  
-  // CORS
-  allowedOrigins: (process.env.ALLOWED_ORIGINS || 'http://localhost:5173')
+  allowedOrigins: (process.env.ALLOWED_ORIGINS || 'http://localhost:5173,http://localhost:3000')
     .split(',')
     .map(o => o.trim()),
-  
-  // PACS Configuration (unified for Orthanc and DICOMweb)
+
+  // ===== PACS =====
   pacsType: (process.env.PACS_TYPE || 'orthanc') as PacsType,
-  pacsUrl: process.env.PACS_URL || process.env.ORTHANC_URL || 'http://localhost:8042',
-  pacsAuthType: (process.env.PACS_AUTH_TYPE || 'basic') as AuthType,
-  pacsUsername: process.env.PACS_USERNAME || process.env.ORTHANC_USERNAME || '',
-  pacsPassword: process.env.PACS_PASSWORD || process.env.ORTHANC_PASSWORD || '',
+  pacsBaseUrl: process.env.PACS_BASE_URL || 'http://localhost:8042',
+  
+  // Autenticación PACS
+  pacsAuthType: (process.env.PACS_AUTH_TYPE || 'none') as AuthType,
+  pacsUsername: process.env.PACS_USERNAME || '',
+  pacsPassword: process.env.PACS_PASSWORD || '',
   pacsToken: process.env.PACS_TOKEN || '',
+
+  // ===== DICOMweb ENDPOINTS =====
+  pacsStowEndpoint: process.env.PACS_STOW_ENDPOINT || '/dicomweb/studies',
+  pacsQidoEndpoint: process.env.PACS_QIDO_ENDPOINT || '/dicomweb/studies',
+  pacsWadoEndpoint: process.env.PACS_WADO_ENDPOINT || '/dicomweb/studies',
   
-  // DICOMweb specific paths (FUJIFILM Synapse 7)
-  dicomwebStowPath: process.env.DICOMWEB_STOW_PATH || '/studies',
-  dicomwebQidoPath: process.env.DICOMWEB_QIDO_PATH || '/studies',
-  dicomwebWadoPath: process.env.DICOMWEB_WADO_PATH || '/studies',
-  
-  // Worklist (MWL) - FUJIFILM Synapse 7 como fuente
-  worklistPreferUps: process.env.WORKLIST_PREFER_UPS !== 'false',  // Default: true (usar UPS-RS)
-  worklistUpsPath: process.env.WORKLIST_UPS_PATH || '/workitems',
-  worklistQidoMwlPath: process.env.WORKLIST_QIDO_MWL_PATH || '/mwlitems',
-  worklistDefaultModality: process.env.WORKLIST_DEFAULT_MODALITY || 'ES',  // Endoscopy
-  
-  // Legacy Orthanc support (deprecated, use pacs* instead)
-  orthancUrl: process.env.ORTHANC_URL || 'http://localhost:8042',
-  orthancUsername: process.env.ORTHANC_USERNAME || '',
-  orthancPassword: process.env.ORTHANC_PASSWORD || '',
-  
-  // Queue
-  retryIntervalMs: parseInt(process.env.RETRY_INTERVAL_MS || '60000', 10),
-  maxRetryAttempts: parseInt(process.env.MAX_RETRY_ATTEMPTS || '5', 10),
-  cleanupAfterHours: parseInt(process.env.CLEANUP_AFTER_HOURS || '24', 10),
-  
-  // Rate Limiting
-  rateLimitMax: parseInt(process.env.RATE_LIMIT_MAX || '100', 10),
-  rateLimitWindowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS || '60000', 10),
-  
-  // Paths
-  dataDir: process.env.DATA_DIR || './data',
+  // ===== WORKLIST =====
+  worklistMode: (process.env.WORKLIST_MODE || 'pacs') as 'mock' | 'pacs',
+  worklistEndpoint: process.env.WORKLIST_ENDPOINT || '/dicomweb/workitems',
+  worklistMwlEndpoint: process.env.WORKLIST_MWL_ENDPOINT || '/dicomweb/mwlitems',
+  worklistPreferUps: process.env.WORKLIST_PREFER_UPS !== 'false',
+  worklistDefaultModality: process.env.WORKLIST_DEFAULT_MODALITY || 'ES',
+
+  // ===== STORAGE =====
+  storagePath: process.env.STORAGE_PATH || './data',
   get pendingDir() {
-    return process.env.DATA_DIR ? `${process.env.DATA_DIR}/pending` : './data/pending';
+    return `${this.storagePath}/pending`;
+  },
+  get processedDir() {
+    return `${this.storagePath}/processed`;
+  },
+  get failedDir() {
+    return `${this.storagePath}/failed`;
   },
   get dbPath() {
-    return process.env.DATA_DIR ? `${process.env.DATA_DIR}/gateway.db` : './data/gateway.db';
+    return `${this.storagePath}/gateway.db`;
   },
+
+  // ===== QUEUE =====
+  queueRetryInterval: parseInt(process.env.QUEUE_RETRY_INTERVAL || '5000', 10),
+  queueMaxRetries: parseInt(process.env.QUEUE_MAX_RETRIES || '5', 10),
+  cleanupAfterHours: parseInt(process.env.CLEANUP_AFTER_HOURS || '48', 10),
+
+  // ===== RATE LIMITING =====
+  rateLimitMax: parseInt(process.env.RATE_LIMIT_MAX || '100', 10),
+  rateLimitWindowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS || '60000', 10),
+
+  // ===== LEGACY (compatibilidad hacia atrás) =====
+  // Estos mapean a los nuevos nombres
+  get pacsUrl() { return this.pacsBaseUrl; },
+  get retryIntervalMs() { return this.queueRetryInterval; },
+  get maxRetryAttempts() { return this.queueMaxRetries; },
+  get dataDir() { return this.storagePath; },
+  get dicomwebStowPath() { return this.pacsStowEndpoint; },
+  get dicomwebQidoPath() { return this.pacsQidoEndpoint; },
+  get dicomwebWadoPath() { return this.pacsWadoEndpoint; },
+  get worklistUpsPath() { return this.worklistEndpoint; },
+  get worklistQidoMwlPath() { return this.worklistMwlEndpoint; },
+  get orthancUrl() { return this.pacsBaseUrl; },
+  get orthancUsername() { return this.pacsUsername; },
+  get orthancPassword() { return this.pacsPassword; },
+};
+
+// ===== SUPABASE (PWA Backend) =====
+export const supabaseConfig = {
+  url: process.env.SUPABASE_URL || '',
+  serviceKey: process.env.SUPABASE_SERVICE_KEY || '',
+  enabled: !!process.env.SUPABASE_URL && !!process.env.SUPABASE_SERVICE_KEY,
+};
+
+// ===== WORKLIST SYNC =====
+export const syncConfig = {
+  enabled: process.env.WORKLIST_SYNC_ENABLED !== 'false',
+  pollingIntervalMs: parseInt(process.env.WORKLIST_SYNC_INTERVAL_MS || '30000', 10),
+  defaultBoxId: process.env.WORKLIST_DEFAULT_BOX_ID || '1',
+  defaultCentroId: process.env.WORKLIST_DEFAULT_CENTRO_ID || '',
 };

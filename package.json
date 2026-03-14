@@ -24,6 +24,7 @@
     "@fastify/multipart": "^8.1.0",
     "@fastify/rate-limit": "^9.1.0",
     "@fastify/static": "^7.0.1",
+    "@supabase/supabase-js": "^2.99.1",
     "dotenv": "^16.4.5",
     "fastify": "^4.26.2",
     "pino-pretty": "^11.0.0",
