@@ -149,6 +149,8 @@ function generateDashboardHtml(data: DashboardData): string {
     .btn { padding: 8px 16px; border-radius: 6px; border: none; cursor: pointer; font-size: 13px; font-weight: 500; }
     .btn-primary { background: #4f46e5; color: white; }
     .btn-primary:hover { background: #4338ca; }
+    .btn-config { background: rgba(255,255,255,0.2); color: white; text-decoration: none; padding: 10px 20px; }
+    .btn-config:hover { background: rgba(255,255,255,0.3); }
     table { width: 100%; border-collapse: collapse; font-size: 14px; }
     th { text-align: left; padding: 12px 8px; background: #f9fafb; font-weight: 600; font-size: 12px; text-transform: uppercase; color: #6b7280; }
     .config-section { margin-top: 24px; padding: 20px; background: white; border-radius: 12px; }
@@ -160,8 +162,13 @@ function generateDashboardHtml(data: DashboardData): string {
 </head>
 <body>
   <div class="header">
-    <h1>🏥 Andex Gateway</h1>
-    <p>${data.centroNombre}</p>
+    <div style="display: flex; justify-content: space-between; align-items: center;">
+      <div>
+        <h1>🏥 Andex Gateway</h1>
+        <p>${data.centroNombre}</p>
+      </div>
+      <a href="/config" class="btn btn-config">⚙️ Configuración</a>
+    </div>
   </div>
   
   <div class="container">
@@ -218,7 +225,10 @@ function generateDashboardHtml(data: DashboardData): string {
     </div>
 
     <div class="config-section">
-      <h3>🔧 Configuración</h3>
+      <div style="display: flex; justify-content: space-between; align-items: center;">
+        <h3 style="margin: 0;">🔧 Configuración</h3>
+        <a href="/config" class="btn btn-primary" style="text-decoration: none;">⚙️ Editar</a>
+      </div>
       <div class="config-row">
         <span class="config-label">Orthanc URL:</span>
         <span class="config-value">${data.orthancUrl}</span>

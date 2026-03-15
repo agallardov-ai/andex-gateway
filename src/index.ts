@@ -13,6 +13,7 @@ import { healthRoutes } from './routes/health.routes.js';
 import { uiRoutes } from './routes/ui.routes.js';
 import { metricsRoutes } from './routes/metrics.routes.js';
 import { worklistRoutes } from './routes/worklist.routes.js';
+import { configRoutes } from './routes/config.routes.js';
 
 // Initialize Fastify
 const fastify = Fastify({
@@ -64,6 +65,7 @@ async function registerRoutes() {
   await fastify.register(uiRoutes);
   await fastify.register(metricsRoutes);
   await fastify.register(worklistRoutes);
+  await fastify.register(configRoutes);
 }
 
 // Graceful shutdown
