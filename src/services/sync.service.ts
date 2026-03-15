@@ -221,6 +221,7 @@ async function resolveMedicoId(item: WorklistItem): Promise<string | null> {
 
 /**
  * Maneja una cita existente - actualiza si es necesario
+ * IMPORTANTE: No sobrescribe procedimiento ni medico_id si fueron modificados manualmente
  */
 async function handleExistingAgenda(
   agenda: Agenda,
@@ -237,35 +238,44 @@ async function handleExistingAgenda(
   // Parsear fecha/hora del worklist
   const { fecha, hora } = parseScheduledDateTime(item.scheduledDateTime || '');
 
-  // Resolver médico (aunque ya exista la cita, el mapeo pudo cambiar)
-  const medicoId = await resolveMedicoId(item);
-
-  // Mapear procedimiento
-  const newProcedimiento = mapProcedure(item.scheduledProcedureDescription || item.requestedProcedureDescription);
+  // Mapear procedimiento original del PACS para comparación
+  const pacsProcedimiento = mapProcedure(item.scheduledProcedureDescription || item.requestedProcedureDescription);
+  const currentProcedimiento = (agenda as any).procedimiento;
   
-  // Verificar si hay cambios
+  // Detectar si el procedimiento fue modificado manualmente
+  // Si el procedimiento actual NO coincide con el mapeo del PACS, no lo sobrescribimos
+  const procedimientoModificado = currentProcedimiento && currentProcedimiento !== pacsProcedimiento;
+  
+  // Resolver médico (solo si no hay uno asignado manualmente)
+  const currentMedicoId = (agenda as any).medico_id;
+  const medicoId = currentMedicoId ? null : await resolveMedicoId(item);
+  
+  // Verificar si hay cambios (solo fecha/hora, no procedimiento ni médico si fueron modificados)
   const hasChanges = 
     agenda.fecha !== fecha || 
     agenda.hora !== hora ||
-    (medicoId && (agenda as any).medico_id !== medicoId) ||
-    (agenda as any).procedimiento !== newProcedimiento;
+    (!currentMedicoId && medicoId);
 
   if (hasChanges) {
     const updates: any = {
       fecha,
       hora,
-      pacs_synced_at: new Date().toISOString(),
-      procedimiento: newProcedimiento
+      pacs_synced_at: new Date().toISOString()
     };
     
-    // Solo actualizar medico_id si tenemos uno mapeado
-    if (medicoId) {
+    // Solo actualizar medico_id si NO había uno asignado manualmente
+    if (!currentMedicoId && medicoId) {
       updates.medico_id = medicoId;
+    }
+    
+    // Solo actualizar procedimiento si NO fue modificado manualmente
+    if (!procedimientoModificado) {
+      updates.procedimiento = pacsProcedimiento;
     }
     
     await updateAgenda(agenda.id, updates);
     result.updated++;
-    log('info', `Updated agenda ${agenda.accession_number}: hora=${hora}, procedimiento="${newProcedimiento}"${medicoId ? `, medico=${medicoId}` : ''}`);
+    log('info', `Updated agenda ${agenda.accession_number}: hora=${hora}${!procedimientoModificado ? `, procedimiento="${pacsProcedimiento}"` : ' (proc manual)'}${medicoId ? `, medico=${medicoId}` : ''}`);
   }
 }
 

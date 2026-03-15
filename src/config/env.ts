@@ -86,8 +86,13 @@ export const config = {
 // ===== SUPABASE (PWA Backend) =====
 export const supabaseConfig = {
   url: process.env.SUPABASE_URL || '',
-  serviceKey: process.env.SUPABASE_SERVICE_KEY || '',
-  enabled: !!process.env.SUPABASE_URL && !!process.env.SUPABASE_SERVICE_KEY,
+  serviceKey: process.env.SUPABASE_SERVICE_KEY || '',      // legacy (bypasses RLS)
+  anonKey: process.env.SUPABASE_ANON_KEY || '',             // public key (RLS enforced)
+  centroToken: process.env.SUPABASE_CENTRO_TOKEN || '',     // per-centro JWT (RLS scoped)
+  enabled: !!process.env.SUPABASE_URL && (
+    !!process.env.SUPABASE_SERVICE_KEY ||
+    (!!process.env.SUPABASE_ANON_KEY && !!process.env.SUPABASE_CENTRO_TOKEN)
+  ),
 };
 
 // ===== WORKLIST SYNC =====

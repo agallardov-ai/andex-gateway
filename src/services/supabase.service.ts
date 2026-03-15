@@ -57,13 +57,25 @@ export function initSupabase(): boolean {
   }
 
   try {
-    supabaseClient = createClient(supabaseConfig.url, supabaseConfig.serviceKey, {
-      auth: {
-        autoRefreshToken: false,
-        persistSession: false
-      }
-    });
-    log('info', 'Supabase client initialized');
+    if (supabaseConfig.centroToken && supabaseConfig.anonKey) {
+      // Secure mode: anon key + per-centro JWT (RLS enforced)
+      supabaseClient = createClient(supabaseConfig.url, supabaseConfig.anonKey, {
+        auth: { autoRefreshToken: false, persistSession: false },
+        global: {
+          headers: { Authorization: `Bearer ${supabaseConfig.centroToken}` }
+        }
+      });
+      log('info', 'Supabase client initialized (RLS mode - centro scoped)');
+    } else if (supabaseConfig.serviceKey) {
+      // Legacy mode: service_role key (bypasses RLS — migrate to centro token)
+      supabaseClient = createClient(supabaseConfig.url, supabaseConfig.serviceKey, {
+        auth: { autoRefreshToken: false, persistSession: false }
+      });
+      log('warn', 'Supabase using service_role key (LEGACY) — migrate to SUPABASE_ANON_KEY + SUPABASE_CENTRO_TOKEN');
+    } else {
+      log('error', 'Supabase credentials incomplete');
+      return false;
+    }
     return true;
   } catch (error) {
     log('error', 'Failed to initialize Supabase', { error: String(error) });
