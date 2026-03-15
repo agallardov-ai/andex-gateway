@@ -1,0 +1,38 @@
+# Dependencies
+node_modules/
+npm-debug.log*
+
+# Source (compiled in builder stage)
+src/
+tsconfig.json
+.eslintrc*
+
+# Local data & config
+data/
+.env
+.env.backup*
+*.log
+
+# Scripts & docs
+setup.sh
+provision-supabase.sh
+pending_migrations.sql
+SETUP_*.txt
+PROVISION_*.txt
+*.md
+*.sql
+
+# IDE & OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Git
+.git/
+.gitignore
+
+# Docker (avoid recursive builds)
+docker-compose*.yml
+Dockerfile
+.dockerignore

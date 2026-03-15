@@ -1,0 +1,41 @@
+# ╔═══════════════════════════════════════════════════════════════╗
+# ║  ANDEX GATEWAY — Docker Compose Producción                   ║
+# ║                                                               ║
+# ║  Para hospitales que YA tienen su propio PACS.                ║
+# ║  Solo despliega el Gateway (sin Orthanc).                     ║
+# ║                                                               ║
+# ║  Uso:                                                         ║
+# ║    1. Configurar .env con ./setup.sh                          ║
+# ║    2. docker-compose -f docker-compose.prod.yml up -d         ║
+# ╚═══════════════════════════════════════════════════════════════╝
+
+services:
+  gateway:
+    build: .
+    image: andex-gateway:latest
+    container_name: andex-gateway
+    ports:
+      - "${PORT:-3001}:3001"
+    env_file:
+      - .env
+    environment:
+      # Forzar storage dentro del container
+      - STORAGE_PATH=/app/data
+    volumes:
+      - gateway-data:/app/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  gateway-data:
+    driver: local
