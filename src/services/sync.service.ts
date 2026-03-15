@@ -227,7 +227,8 @@ async function handleExistingAgenda(
     const updates: any = {
       fecha,
       hora,
-      pacs_synced_at: new Date().toISOString()
+      pacs_synced_at: new Date().toISOString(),
+      procedimiento: item.scheduledProcedureDescription || item.requestedProcedureDescription || null
     };
     
     // Solo actualizar medico_id si tenemos uno mapeado
@@ -260,6 +261,7 @@ async function handleNewAgenda(
 
   const agendaData: any = {
     paciente_id: paciente.id,
+    procedimiento: item.scheduledProcedureDescription || item.requestedProcedureDescription || null,
     fecha,
     hora,
     ...(isValidUuid && { box_id: boxId }),
