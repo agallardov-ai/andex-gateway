@@ -34,6 +34,7 @@ import {
   parseHl7Date
 } from './rut.service.js';
 import { findOrCreatePacsPhysician } from './pacs-physician.service.js';
+import { mapProcedure } from './procedure-mapping.service.js';
 
 export interface SyncResult {
   success: boolean;
@@ -179,6 +180,28 @@ async function resolveMedicoId(item: WorklistItem): Promise<string | null> {
     return null;
   }
 
+  // Filtrar nombres genéricos/inválidos de Synapse y otros PACS
+  const invalidNames = [
+    'unknown',
+    'tecnologo',
+    'tecnologa',
+    'enfermero',
+    'enfermera',
+    'admin',
+    'sistema',
+    'system',
+    'n/a',
+    'na',
+    'sin asignar',
+    'por asignar'
+  ];
+  
+  const nameLower = physicianName.toLowerCase().replace(/\^/g, ' ').trim();
+  if (invalidNames.some(invalid => nameLower.includes(invalid))) {
+    log('debug', `Skipping invalid physician name: ${physicianName}`);
+    return null;
+  }
+
   const centroId = syncConfig.defaultCentroId;
   if (!centroId) {
     return null;
@@ -217,18 +240,22 @@ async function handleExistingAgenda(
   // Resolver médico (aunque ya exista la cita, el mapeo pudo cambiar)
   const medicoId = await resolveMedicoId(item);
 
+  // Mapear procedimiento
+  const newProcedimiento = mapProcedure(item.scheduledProcedureDescription || item.requestedProcedureDescription);
+  
   // Verificar si hay cambios
   const hasChanges = 
     agenda.fecha !== fecha || 
     agenda.hora !== hora ||
-    (medicoId && (agenda as any).medico_id !== medicoId);
+    (medicoId && (agenda as any).medico_id !== medicoId) ||
+    (agenda as any).procedimiento !== newProcedimiento;
 
   if (hasChanges) {
     const updates: any = {
       fecha,
       hora,
       pacs_synced_at: new Date().toISOString(),
-      procedimiento: item.scheduledProcedureDescription || item.requestedProcedureDescription || null
+      procedimiento: newProcedimiento
     };
     
     // Solo actualizar medico_id si tenemos uno mapeado
@@ -238,7 +265,7 @@ async function handleExistingAgenda(
     
     await updateAgenda(agenda.id, updates);
     result.updated++;
-    log('info', `Updated agenda ${agenda.accession_number}: ${agenda.hora} → ${hora}${medicoId ? `, medico: ${medicoId}` : ''}`);
+    log('info', `Updated agenda ${agenda.accession_number}: hora=${hora}, procedimiento="${newProcedimiento}"${medicoId ? `, medico=${medicoId}` : ''}`);
   }
 }
 
@@ -261,7 +288,7 @@ async function handleNewAgenda(
 
   const agendaData: any = {
     paciente_id: paciente.id,
-    procedimiento: item.scheduledProcedureDescription || item.requestedProcedureDescription || null,
+    procedimiento: mapProcedure(item.scheduledProcedureDescription || item.requestedProcedureDescription),
     fecha,
     hora,
     ...(isValidUuid && { box_id: boxId }),
