@@ -21,6 +21,9 @@ export async function uiRoutes(fastify: FastifyInstance): Promise<void> {
         orthancVersion: orthancStatus.version,
         stats,
         jobs: recentJobs,
+        httpPort: config.port,
+        httpsPort: parseInt(process.env.HTTPS_PORT || '3443', 10),
+        apiKey: config.apiKey,
       });
 
       return reply.type('text/html').send(html);
@@ -39,6 +42,9 @@ export async function uiRoutes(fastify: FastifyInstance): Promise<void> {
         orthancConnected: orthancStatus.ok,
         stats,
         jobs: recentJobs,
+        httpPort: config.port,
+        httpsPort: parseInt(process.env.HTTPS_PORT || '3443', 10),
+        apiKey: config.apiKey,
       });
     }
   });
@@ -49,6 +55,12 @@ interface DashboardData {
   orthancConnected: boolean;
   orthancUrl: string;
   orthancVersion?: string;
+  httpPort: number;
+  httpsPort: number;
+  apiKey: string;
+  httpPort: number;
+  httpsPort: number;
+  apiKey: string;
   stats: { total: number; pending: number; sending: number; sent: number; failed: number; cancelled: number };
   jobs: Array<{
     id: string;
@@ -225,17 +237,31 @@ function generateDashboardHtml(data: DashboardData): string {
     </div>
 
     <div class="config-section">
-      <div style="display: flex; justify-content: space-between; align-items: center;">
-        <h3 style="margin: 0;">🔧 Configuración</h3>
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+        <h3 style="margin: 0;">🔧 Conexión Gateway</h3>
         <a href="/config" class="btn btn-primary" style="text-decoration: none;">⚙️ Editar</a>
       </div>
-      <div class="config-row">
-        <span class="config-label">Orthanc URL:</span>
+      <div class="config-row" style="align-items: center;">
+        <span class="config-label">🌐 HTTP:</span>
+        <span class="config-value">http://localhost:${data.httpPort}</span>
+        <button onclick="copyText('http://localhost:${data.httpPort}')" style="margin-left:8px;padding:2px 10px;font-size:11px;background:#e5e7eb;border:none;border-radius:4px;cursor:pointer;">📋 Copiar</button>
+      </div>
+      <div class="config-row" style="align-items: center;">
+        <span class="config-label">🔒 HTTPS:</span>
+        <span class="config-value" style="color:#22c55e;font-weight:600;">https://localhost:${data.httpsPort}</span>
+        <button onclick="copyText('https://localhost:${data.httpsPort}')" style="margin-left:8px;padding:2px 10px;font-size:11px;background:#e5e7eb;border:none;border-radius:4px;cursor:pointer;">📋 Copiar</button>
+        <span style="margin-left:8px;font-size:11px;color:#6b7280;background:#f0fdf4;padding:2px 8px;border-radius:4px;">← usar en PWA</span>
+      </div>
+      <div class="config-row" style="align-items: center;">
+        <span class="config-label">🏥 PACS:</span>
         <span class="config-value">${data.orthancUrl}</span>
       </div>
-      <div class="config-row">
-        <span class="config-label">API Key:</span>
-        <span class="config-value">****-****-****</span>
+      <div class="config-row" style="align-items: center;">
+        <span class="config-label">🔑 API Key:</span>
+        <span class="config-value" id="api-key-display">${data.apiKey.substring(0, 4)}${'*'.repeat(Math.max(0, data.apiKey.length - 4))}</span>
+        <button onclick="toggleApiKey()" id="toggle-btn" style="margin-left:8px;padding:2px 10px;font-size:11px;background:#e5e7eb;border:none;border-radius:4px;cursor:pointer;">👁️ Mostrar</button>
+        <button onclick="copyText(document.getElementById('api-key-full').textContent)" style="margin-left:4px;padding:2px 10px;font-size:11px;background:#e5e7eb;border:none;border-radius:4px;cursor:pointer;">📋 Copiar</button>
+        <span id="api-key-full" style="display:none">${data.apiKey}</span>
       </div>
     </div>
   </div>
@@ -255,6 +281,37 @@ function generateDashboardHtml(data: DashboardData): string {
       } catch (e) {
         alert('Error: ' + e.message);
       }
+    }
+
+    function toggleApiKey() {
+      var display = document.getElementById('api-key-display');
+      var full = document.getElementById('api-key-full');
+      var btn = document.getElementById('toggle-btn');
+      if (display.dataset.visible === 'true') {
+        display.textContent = full.textContent.substring(0, 4) + '*'.repeat(full.textContent.length - 4);
+        display.dataset.visible = 'false';
+        btn.textContent = '👁️ Mostrar';
+      } else {
+        display.textContent = full.textContent;
+        display.dataset.visible = 'true';
+        btn.textContent = '🙈 Ocultar';
+      }
+    }
+
+    function copyText(text) {
+      navigator.clipboard.writeText(text).then(function() {
+        var btn = event.target;
+        var orig = btn.textContent;
+        btn.textContent = '✅ Copiado!';
+        setTimeout(function() { btn.textContent = orig; }, 1500);
+      }).catch(function() {
+        var ta = document.createElement('textarea');
+        ta.value = text;
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+      });
     }
 
     // Auto-refresh every 30 seconds
