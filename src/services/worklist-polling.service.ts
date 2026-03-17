@@ -41,10 +41,15 @@ export async function refreshWorklistCache(): Promise<{ success: boolean; itemCo
     lastFetchTime = new Date();
 
     // Sincronizar con Supabase si esta habilitado
+    // IMPORTANTE: NO sincronizar datos mock a Supabase — los mock generan
+    // accession numbers nuevos cada día (ACC{YYYYMMDD}001) lo que crea
+    // filas duplicadas acumulativas en la tabla agenda.
     let syncResult: SyncResult | undefined;
-    if (syncConfig.enabled && isSupabaseEnabled()) {
+    if (syncConfig.enabled && isSupabaseEnabled() && config.worklistMode !== 'mock') {
       syncResult = await syncWorklistToSupabase(worklistCache);
       setLastSyncResult(syncResult);
+    } else if (config.worklistMode === 'mock') {
+      log('debug', 'Mock mode: skipping Supabase sync to avoid phantom agenda entries');
     }
 
     return { success: true, itemCount: worklistCache.length, syncResult };
