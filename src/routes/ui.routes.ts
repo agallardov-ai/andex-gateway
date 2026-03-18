@@ -5,7 +5,7 @@ import { checkOrthancHealth } from '../services/orthanc.service.js';
 import { dashboardAuth } from '../plugins/auth.plugin.js';
 
 export async function uiRoutes(fastify: FastifyInstance): Promise<void> {
-  
+
   // Dashboard HTML
   fastify.get('/', {
     preHandler: dashboardAuth,
@@ -55,9 +55,6 @@ interface DashboardData {
   orthancConnected: boolean;
   orthancUrl: string;
   orthancVersion?: string;
-  httpPort: number;
-  httpsPort: number;
-  apiKey: string;
   httpPort: number;
   httpsPort: number;
   apiKey: string;
@@ -121,10 +118,10 @@ function generateDashboardHtml(data: DashboardData): string {
       <td style="padding: 8px; border-bottom: 1px solid #e5e7eb;">${job.attempts}/${job.max_attempts}</td>
       <td style="padding: 8px; border-bottom: 1px solid #e5e7eb;">${timeAgo(job.created_at)}</td>
       <td style="padding: 8px; border-bottom: 1px solid #e5e7eb;">
-        ${job.status === 'failed' || job.status === 'pending' ? 
-          `<button onclick="retryJob('${job.id}')" style="padding: 4px 8px; background: #3b82f6; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px;">Retry</button>` : 
-          ''
-        }
+        ${job.status === 'failed' || job.status === 'pending' ?
+      `<button onclick="retryJob('${job.id}')" style="padding: 4px 8px; background: #3b82f6; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px;">Retry</button>` :
+      ''
+    }
       </td>
     </tr>
   `).join('');
