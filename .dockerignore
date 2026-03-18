@@ -2,9 +2,7 @@
 node_modules/
 npm-debug.log*
 
-# Source (compiled in builder stage)
-src/
-tsconfig.json
+# Source (needed for builder stage - do not exclude)
 .eslintrc*
 
 # Local data & config
@@ -20,6 +18,8 @@ pending_migrations.sql
 SETUP_*.txt
 PROVISION_*.txt
 *.md
+# Allow schema.sql for build (Dockerfile needs it)
+!src/db/schema.sql
 *.sql
 
 # IDE & OS
