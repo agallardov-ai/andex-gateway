@@ -26,6 +26,15 @@ async function fetchTodayWorklist(): Promise<WorklistItem[]> {
     limit: 200
   };
 
+  // Aplicar filtros opcionales desde .env
+  if (config.worklistStationAET) {
+    params.stationAET = config.worklistStationAET;
+  }
+  if (config.worklistDefaultModality) {
+    params.modality = config.worklistDefaultModality;
+  }
+
+
   const result = await queryWorklist(params);
   if (result.success) {
     log('info', `Worklist polling: fetched ${result.items.length} items`, { date: today });

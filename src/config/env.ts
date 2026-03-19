@@ -42,6 +42,7 @@ export const config = {
   worklistMwlEndpoint: process.env.WORKLIST_MWL_ENDPOINT || '/dicomweb/mwlitems',
   worklistPreferUps: process.env.WORKLIST_PREFER_UPS !== 'false',
   worklistDefaultModality: process.env.WORKLIST_DEFAULT_MODALITY || 'ES',
+  worklistStationAET: process.env.WORKLIST_STATION_AET || '',
 
   // ===== STORAGE =====
   storagePath: process.env.STORAGE_PATH || './data',
