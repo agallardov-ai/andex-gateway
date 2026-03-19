@@ -11,6 +11,7 @@ import { initDatabase } from './db/database.js';
 import { initStorage } from './services/storage.service.js';
 import { startRetryWorker, startCleanupWorker, stopWorkers } from './services/queue.service.js';
 import { startWorklistPolling, stopWorklistPolling } from './services/worklist-polling.service.js';
+import { startMonitoring, stopMonitoring } from './services/monitoring.service.js';
 import { dicomRoutes } from './routes/dicom.routes.js';
 import { healthRoutes } from './routes/health.routes.js';
 import { uiRoutes } from './routes/ui.routes.js';
@@ -112,6 +113,7 @@ async function shutdown() {
   console.log('\n\u23f9\ufe0f Shutting down...');
   stopWorkers();
   stopWorklistPolling();
+  stopMonitoring();
   if (httpServer) await httpServer.close();
   if (httpsServer) await httpsServer.close();
   process.exit(0);
@@ -141,6 +143,7 @@ async function start() {
     startRetryWorker();
     startCleanupWorker();
     startWorklistPolling();
+    startMonitoring();
 
     // ---- HTTPS Server (port 3443 if certs exist) ----
     const tlsCerts = findTlsCerts();
