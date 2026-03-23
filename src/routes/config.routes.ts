@@ -7,10 +7,11 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import fs from 'fs';
 import path from 'path';
-import { config } from '../config/env.js';
+import { config, supabaseConfig } from '../config/env.js';
 import { dashboardAuth } from '../plugins/auth.plugin.js';
 import { queryWorklist, getWorklistConfig, configureWorklist } from '../services/worklist.service.js';
 import { configStore } from '../config/config-store.js';
+import { getSupabase, isSupabaseEnabled } from '../services/supabase.service.js';
 
 export async function configRoutes(fastify: FastifyInstance): Promise<void> {
 
@@ -229,8 +230,111 @@ export async function configRoutes(fastify: FastifyInstance): Promise<void> {
   });
 
   // ========================================
-  // HELPERS: labels & diagnostics for tests
+  // LOOKUP CENTRO — Buscar centro por UUID
   // ========================================
+  fastify.post('/api/config/lookup-centro', {
+    preHandler: dashboardAuth,
+    handler: async (request: FastifyRequest, reply: FastifyReply) => {
+      const body = request.body as any;
+      const centroId = (body?.centroId || '').trim();
+
+      // Validate UUID format
+      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      if (!centroId) {
+        return reply.send({ success: false, error: 'Debe ingresar un ID de Centro (UUID)' });
+      }
+      if (!uuidRegex.test(centroId)) {
+        return reply.send({
+          success: false,
+          error: 'El ID del Centro debe ser un UUID válido',
+          hint: 'Formato: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx (ej: a0000001-de00-4000-a000-000000000001)',
+          received: centroId,
+        });
+      }
+
+      // Try Supabase lookup
+      if (!isSupabaseEnabled()) {
+        return reply.send({
+          success: false,
+          error: 'Supabase no está configurado en este Gateway',
+          hint: 'Sin conexión a Supabase, no se puede verificar el Centro. Puede ingresar los datos manualmente.',
+          supabaseConfigured: false,
+          centroId,
+        });
+      }
+
+      try {
+        const supabase = getSupabase();
+        if (!supabase) {
+          return reply.send({ success: false, error: 'Cliente Supabase no disponible' });
+        }
+
+        const { data, error } = await supabase
+          .from('centros')
+          .select('id, nombre, direccion, telefono, email, web, subtitulo_unidad, activo, plan_type, subscription_status')
+          .eq('id', centroId)
+          .maybeSingle();
+
+        if (error) {
+          return reply.send({
+            success: false,
+            error: `Error consultando Supabase: ${error.message}`,
+            hint: error.code === 'PGRST116' ? 'La tabla centros puede no existir o no tener acceso.' : 'Verifique la conexión y permisos de Supabase.',
+            supabaseConfigured: true,
+            centroId,
+          });
+        }
+
+        if (!data) {
+          return reply.send({
+            success: false,
+            error: `No se encontró un Centro con ID "${centroId}"`,
+            hint: 'Verifique que el UUID sea correcto. Puede obtenerlo desde el panel de administración de AndexReports.',
+            supabaseConfigured: true,
+            centroId,
+          });
+        }
+
+        return reply.send({
+          success: true,
+          centro: {
+            id: data.id,
+            nombre: data.nombre,
+            direccion: data.direccion || '',
+            telefono: data.telefono || '',
+            email: data.email || '',
+            web: data.web || '',
+            subtituloUnidad: data.subtitulo_unidad || '',
+            activo: data.activo,
+            plan: data.plan_type || '',
+            subscriptionStatus: data.subscription_status || '',
+          },
+          message: `Centro encontrado: ${data.nombre}`,
+        });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return reply.send({
+          success: false,
+          error: `Error inesperado: ${msg}`,
+          centroId,
+        });
+      }
+    }
+  });
+
+  // ========================================
+  // ERROR CODE SYSTEM — Rich diagnostics
+  // ========================================
+  interface DiagnosticResult {
+    code: string;
+    severity: 'critical' | 'error' | 'warning' | 'info';
+    title: string;
+    detail: string;
+    causes: string[];
+    fixes: string[];
+    technical: Record<string, string>;
+  }
+
   function getPacsTypeLabel(type: string): string {
     switch (type) {
       case 'orthanc': return 'Orthanc REST API';
@@ -240,50 +344,512 @@ export async function configRoutes(fastify: FastifyInstance): Promise<void> {
     }
   }
 
-  function diagnoseError(err: unknown, context: { pacsType: string; url?: string; host?: string; port?: number }): { error: string; hint: string } {
+  function diagnoseError(err: unknown, context: { pacsType: string; url?: string; host?: string; port?: number }): DiagnosticResult {
     const msg = err instanceof Error ? err.message : String(err);
+    const errCode = (err as any)?.code || '';
     const label = getPacsTypeLabel(context.pacsType);
-    let hint = '';
+    const target = context.url || `${context.host || '?'}:${context.port || '?'}`;
 
-    // Connection refused
-    if (/ECONNREFUSED/i.test(msg)) {
-      if (context.url) {
-        hint = `El servidor no responde en ${context.url}. Verifique que el PACS (${label}) esté encendido y que la URL y puerto sean correctos.`;
-      } else {
-        hint = `No se pudo conectar a ${context.host}:${context.port}. Verifique que el PACS esté encendido y el puerto abierto en el firewall.`;
+    // ECONNREFUSED
+    if (/ECONNREFUSED/i.test(msg) || errCode === 'ECONNREFUSED') {
+      const portInfo = context.port || (context.url ? (() => { try { return new URL(context.url).port || (context.url.startsWith('https') ? '443' : '80'); } catch { return '?'; } })() : '?');
+      return {
+        code: 'GW-NET-001',
+        severity: 'critical',
+        title: 'Conexión Rechazada (ECONNREFUSED)',
+        detail: `El servidor en ${target} rechazó activamente la conexión TCP en el puerto ${portInfo}. El host existe y responde, pero nada escucha en ese puerto.`,
+        causes: [
+          `El servicio PACS (${label}) no está corriendo o no ha terminado de iniciar`,
+          'El puerto configurado no coincide con el puerto real del PACS',
+          'Un firewall local rechaza (REJECT) la conexión saliente',
+          'El PACS escucha solo en localhost/127.0.0.1 y el Gateway conecta por IP externa',
+          'Si es Docker: el contenedor no tiene port-mapping (-p) hacia el host',
+        ],
+        fixes: [
+          `Verifique que el servicio PACS (${label}) esté iniciado: revise el panel de servicios o el Docker container`,
+          `Confirme que el puerto ${portInfo} es el correcto (ejecute: netstat -tlnp | grep ${portInfo})`,
+          `Pruebe conectividad directa: curl -v ${context.url || `telnet ${context.host} ${context.port}`}`,
+          'Revise reglas de firewall: iptables -L / Windows Firewall / macOS pf',
+          'Si el PACS es Docker: docker ps | grep pacs && docker port CONTAINER',
+        ],
+        technical: {
+          errorCode: 'ECONNREFUSED',
+          rawMessage: msg,
+          target,
+          port: String(portInfo),
+          pacsType: context.pacsType,
+          pacsLabel: label,
+          timestamp: new Date().toISOString(),
+        },
+      };
+    }
+
+    // DNS
+    if (/ENOTFOUND|getaddrinfo/i.test(msg) || errCode === 'ENOTFOUND') {
+      const hostname = context.url ? (() => { try { return new URL(context.url).hostname; } catch { return context.url; } })() : context.host || '?';
+      return {
+        code: 'GW-NET-002',
+        severity: 'critical',
+        title: 'Error de Resolución DNS (ENOTFOUND)',
+        detail: `No se puede resolver el hostname "${hostname}". El sistema DNS no reconoce esta dirección — el PACS no es localizable.`,
+        causes: [
+          `El hostname "${hostname}" está mal escrito o no existe en el DNS`,
+          'El servidor DNS configurado en este equipo no resuelve nombres internos',
+          'Si es un nombre de red interna (.local, .corp), el DNS interno no es accesible',
+          'Hay caracteres extra, espacios o errores tipográficos en la URL',
+        ],
+        fixes: [
+          `Verifique la ortografía exacta de "${hostname}"`,
+          `Pruebe resolución DNS: nslookup ${hostname} o dig ${hostname}`,
+          `Pruebe con ping: ping ${hostname}`,
+          'Si el PACS usa IP estática, use la IP directamente en lugar del hostname',
+          'Consulte con el equipo de TI del centro médico sobre el hostname correcto del PACS',
+        ],
+        technical: {
+          errorCode: 'ENOTFOUND',
+          hostname,
+          rawMessage: msg,
+          target,
+          pacsType: context.pacsType,
+          pacsLabel: label,
+          timestamp: new Date().toISOString(),
+        },
+      };
+    }
+
+    // Timeout
+    if (/timeout|ETIMEDOUT|ESOCKETTIMEDOUT/i.test(msg) || errCode === 'ETIMEDOUT') {
+      return {
+        code: 'GW-NET-003',
+        severity: 'error',
+        title: 'Timeout de Conexión (ETIMEDOUT)',
+        detail: `La conexión a ${target} no respondió dentro del tiempo límite (10s). El servidor no rechaza ni acepta — los paquetes se pierden.`,
+        causes: [
+          'Un firewall intermedio descarta los paquetes silenciosamente (regla DROP)',
+          'La IP existe pero no hay servicio PACS escuchando (sin rechazo activo)',
+          `El PACS (${label}) está sobrecargado y no acepta nuevas conexiones`,
+          'Problemas de enrutamiento: VPN desconectada, subnets sin ruta, etc.',
+          'El PACS está en proceso de arranque y aún no abre el puerto',
+        ],
+        fixes: [
+          `Verifique que el PACS esté completamente iniciado y operativo`,
+          `Pruebe conectividad básica: ping ${context.host || 'HOST'} (¿responde?)`,
+          `Pruebe puerto específico: nc -zv ${context.host || 'HOST'} ${context.port || 'PORT'} -w 5`,
+          'Revise firewalls intermedios entre el Gateway y el PACS',
+          'Si usa VPN, confirme que está conectada y tiene ruta al PACS',
+          'Ejecute traceroute para identificar dónde se pierden los paquetes',
+        ],
+        technical: {
+          errorCode: 'ETIMEDOUT',
+          timeout: '10000ms',
+          rawMessage: msg,
+          target,
+          pacsType: context.pacsType,
+          pacsLabel: label,
+          timestamp: new Date().toISOString(),
+        },
+      };
+    }
+
+    // SSL/TLS
+    if (/SELF_SIGNED|CERT|SSL|TLS|UNABLE_TO_VERIFY|ERR_TLS|DEPTH_ZERO/i.test(msg)) {
+      let specific = 'Error general de certificado SSL/TLS';
+      let certCode = 'GW-TLS-001';
+      if (/SELF_SIGNED|DEPTH_ZERO/i.test(msg)) {
+        specific = 'El servidor presenta un certificado auto-firmado que no está en la cadena de confianza';
+        certCode = 'GW-TLS-001';
+      } else if (/EXPIRED|NOT_YET_VALID/i.test(msg)) {
+        specific = 'El certificado SSL del servidor ha expirado o aún no es válido';
+        certCode = 'GW-TLS-002';
+      } else if (/HOSTNAME|ALT_NAME|CN_MISMATCH/i.test(msg)) {
+        specific = 'El certificado no coincide con el hostname de la URL';
+        certCode = 'GW-TLS-003';
+      }
+      return {
+        code: certCode,
+        severity: 'error',
+        title: `Error de Certificado SSL/TLS (${certCode})`,
+        detail: `${specific}. La conexión HTTPS a ${target} fue rechazada por seguridad.`,
+        causes: [
+          'El PACS usa certificado auto-firmado (común en redes hospitalarias internas)',
+          'El certificado SSL del PACS ha expirado y necesita renovación',
+          'El hostname en la URL no coincide con el CN/SAN del certificado',
+          'Cadena de certificación incompleta — falta un CA intermedio',
+        ],
+        fixes: [
+          'Para desarrollo: NODE_TLS_REJECT_UNAUTHORIZED=0 en .env (⚠️ NUNCA en producción)',
+          'Instale el CA raíz del PACS como certificado confiable en el OS del Gateway',
+          'Si el cert expiró: contacte al administrador del PACS para renovarlo',
+          'Use HTTP en lugar de HTTPS si está en red interna segura (cambie la URL)',
+          'Verifique que la URL usa el mismo hostname que aparece en el certificado',
+        ],
+        technical: {
+          errorCode: certCode,
+          sslDetail: specific,
+          rawMessage: msg,
+          target,
+          pacsType: context.pacsType,
+          pacsLabel: label,
+          timestamp: new Date().toISOString(),
+        },
+      };
+    }
+
+    // Network unreachable
+    if (/ENETUNREACH|EHOSTUNREACH/i.test(msg)) {
+      return {
+        code: 'GW-NET-004',
+        severity: 'critical',
+        title: 'Red Inalcanzable (ENETUNREACH)',
+        detail: `No existe ruta de red hacia ${target}. El sistema operativo no sabe cómo llegar a ese destino.`,
+        causes: [
+          'El PACS está en una subred/VLAN diferente sin enrutamiento configurado',
+          'La interfaz de red del Gateway está desconectada',
+          'La VPN necesaria para alcanzar el PACS no está conectada',
+          'Error de configuración de red: gateway, máscara, tablas de ruta',
+        ],
+        fixes: [
+          'Verifique conectividad básica del Gateway: ping 8.8.8.8 (¿tiene internet?)',
+          `Verifique enrutamiento: traceroute ${context.host || 'HOST'}`,
+          'Si requiere VPN: conéctela y verifique que tiene ruta al segmento del PACS',
+          'Si son VLANs diferentes: confirme enrutamiento inter-VLAN con TI',
+          'Ejecute: ip route (Linux) / route print (Windows) para ver tabla de rutas',
+        ],
+        technical: {
+          errorCode: 'ENETUNREACH',
+          rawMessage: msg,
+          target,
+          pacsType: context.pacsType,
+          pacsLabel: label,
+          timestamp: new Date().toISOString(),
+        },
+      };
+    }
+
+    // ECONNRESET / EPIPE
+    if (/ECONNRESET|EPIPE|BROKEN/i.test(msg)) {
+      return {
+        code: 'GW-NET-005',
+        severity: 'error',
+        title: 'Conexión Reiniciada por el Servidor (ECONNRESET)',
+        detail: `El servidor ${target} aceptó la conexión pero la cerró abruptamente durante la comunicación.`,
+        causes: [
+          'Incompatibilidad de protocolo: el Gateway conecta por HTTPS pero el PACS espera HTTP (o viceversa)',
+          'Un proxy/load-balancer intermedio cortó la conexión',
+          'El PACS rechazó la petición después de leer los headers (auth, content-type, etc.)',
+          'El servicio PACS se reinició durante la petición',
+        ],
+        fixes: [
+          'Verifique si la URL usa el protocolo correcto (http:// vs https://)',
+          'Pruebe cambiar entre HTTP y HTTPS en la URL del PACS',
+          'Revise los logs del PACS para ver si registró un error en su lado',
+          'Si hay proxy/WAF intermedio, verifique su configuración',
+          'Intente nuevamente — si es intermitente, puede ser un problema transitorio',
+        ],
+        technical: {
+          errorCode: 'ECONNRESET',
+          rawMessage: msg,
+          target,
+          pacsType: context.pacsType,
+          pacsLabel: label,
+          timestamp: new Date().toISOString(),
+        },
+      };
+    }
+
+    // Permission / port in use
+    if (/EACCES|EADDRINUSE/i.test(msg)) {
+      const isPortInUse = /EADDRINUSE/i.test(msg);
+      return {
+        code: isPortInUse ? 'GW-NET-007' : 'GW-NET-006',
+        severity: 'error',
+        title: isPortInUse ? 'Puerto en Uso (EADDRINUSE)' : 'Permiso Denegado (EACCES)',
+        detail: isPortInUse
+          ? `El puerto ${context.port || ''} ya está siendo usado por otro proceso en este equipo.`
+          : `Sin permisos para usar el puerto ${context.port || ''}. Los puertos < 1024 requieren privilegios de root/admin.`,
+        causes: isPortInUse
+          ? ['Otra instancia del Gateway ya está corriendo', 'Otro servicio ocupa el mismo puerto (ej: otro DICOM listener)', 'El proceso anterior no se cerró correctamente (socket en TIME_WAIT)']
+          : ['El puerto requiere privilegios de administrador (root/sudo)', 'Restricciones de SELinux o AppArmor', 'Política de seguridad del OS bloquea puertos de red'],
+        fixes: isPortInUse
+          ? [`Identifique el proceso: lsof -i :${context.port || 'PORT'} (macOS/Linux) o netstat -ano | findstr ${context.port || 'PORT'} (Windows)`, 'Detenga la otra instancia o cambie el puerto en la configuración', 'Si acaba de reiniciar, espere 30-60s (TIME_WAIT TCP)']
+          : [`Use un puerto > 1024 (ej: 11113 para DICOM, 3001 para HTTP)`, 'Ejecute el Gateway con sudo/admin (no recomendado para producción)', 'Configure capabilities: sudo setcap cap_net_bind_service=+ep $(which node)'],
+        technical: {
+          errorCode: isPortInUse ? 'EADDRINUSE' : 'EACCES',
+          rawMessage: msg,
+          target,
+          port: String(context.port || ''),
+          pacsType: context.pacsType,
+          pacsLabel: label,
+          timestamp: new Date().toISOString(),
+        },
+      };
+    }
+
+    // Abort
+    if (/abort/i.test(msg)) {
+      return {
+        code: 'GW-NET-008',
+        severity: 'warning',
+        title: 'Petición Cancelada (Abort)',
+        detail: `La petición a ${target} fue cancelada antes de completarse, probablemente por timeout interno.`,
+        causes: [
+          'El timeout interno del test (10s) se alcanzó y la petición fue abortada',
+          'El servidor cerró la conexión inesperadamente',
+          'Problemas intermitentes de conectividad de red',
+        ],
+        fixes: [
+          'Intente nuevamente — puede ser un problema temporal',
+          'Verifique estabilidad de la red: ping -c 10 al host del PACS (¿hay pérdida?)',
+          'Si persiste, revise los logs del PACS y del Gateway para más contexto',
+        ],
+        technical: {
+          errorCode: 'ABORT',
+          rawMessage: msg,
+          target,
+          pacsType: context.pacsType,
+          pacsLabel: label,
+          timestamp: new Date().toISOString(),
+        },
+      };
+    }
+
+    // Generic fallback
+    return {
+      code: 'GW-ERR-999',
+      severity: 'error',
+      title: 'Error No Clasificado',
+      detail: `Error inesperado conectando a ${label} en ${target}.`,
+      causes: [
+        `La configuración de PACS tipo "${label}" puede no coincidir con el servidor real`,
+        'Error interno del Gateway o del PACS',
+        'Problema de red no categorizado',
+      ],
+      fixes: [
+        `Verifique que el tipo "${label}" sea correcto para su PACS`,
+        'Revise la URL/Host y puerto configurados',
+        'Consulte los logs del Gateway (terminal) para stack trace completo',
+        'Copie el diagnóstico técnico y contacte soporte si persiste',
+      ],
+      technical: {
+        errorCode: errCode || 'UNKNOWN',
+        rawMessage: msg,
+        target,
+        pacsType: context.pacsType,
+        pacsLabel: label,
+        timestamp: new Date().toISOString(),
+      },
+    };
+  }
+
+  /** Diagnose HTTP status codes from PACS responses */
+  function diagnoseHttpStatus(status: number, statusText: string, ctx: { pacsType: string; url: string; endpoint?: string; label: string; latency?: number }): DiagnosticResult {
+    const { pacsType, url, endpoint, label } = ctx;
+    const ep = endpoint || url;
+
+    switch (status) {
+      case 400:
+        return {
+          code: 'GW-HTTP-400', severity: 'error',
+          title: 'Solicitud Malformada (HTTP 400)',
+          detail: `El PACS (${label}) rechazó la petición al endpoint ${ep} porque el formato es inválido.`,
+          causes: [
+            'Los parámetros de consulta (query string) tienen formato incorrecto',
+            'Headers HTTP incompatibles con lo que espera el PACS',
+            `El endpoint ${ep} requiere parámetros obligatorios que no se enviaron`,
+            'Content-Type incorrecto para este endpoint',
+          ],
+          fixes: [
+            'Verifique que los endpoints DICOMweb estén correctamente escritos',
+            'Compare los paths con la documentación oficial de su PACS',
+            `Consulte la API docs de ${label} para los parámetros requeridos`,
+          ],
+          technical: { httpStatus: String(status), statusText, endpoint: ep, url, pacsType, latency: ctx.latency ? `${ctx.latency}ms` : '-', timestamp: new Date().toISOString() },
+        };
+      case 401:
+        return {
+          code: 'GW-AUTH-001', severity: 'critical',
+          title: 'No Autorizado — Credenciales Inválidas (HTTP 401)',
+          detail: `El PACS requiere autenticación. Las credenciales enviadas fueron rechazadas o no se enviaron credenciales.`,
+          causes: [
+            'Usuario o contraseña incorrectos para el PACS',
+            'El tipo de autenticación no coincide: el Gateway envía Basic pero el PACS espera Bearer (o viceversa)',
+            'Las credenciales no están configuradas en el Gateway (campos vacíos)',
+            'Si es Bearer: el token ha expirado o es inválido',
+          ],
+          fixes: [
+            '🔑 Verifique usuario y contraseña en la sección "Autenticación PACS" de esta página',
+            'Confirme el tipo de auth requerido con el administrador del PACS',
+            `Pruebe las credenciales directamente: curl -u USER:PASS ${url}`,
+            'Si usa Bearer token: regenere el token desde la consola del PACS',
+          ],
+          technical: { httpStatus: '401', statusText, endpoint: ep, url, pacsType, authNote: 'Verificar credenciales', timestamp: new Date().toISOString() },
+        };
+      case 403:
+        return {
+          code: 'GW-AUTH-002', severity: 'critical',
+          title: 'Acceso Prohibido — Sin Permisos (HTTP 403)',
+          detail: `La autenticación fue aceptada pero el usuario no tiene permisos para esta operación en el PACS.`,
+          causes: [
+            'El usuario PACS no tiene rol o permiso para operaciones DICOMweb',
+            'El PACS tiene whitelist de IPs y la IP del Gateway no está incluida',
+            'CORS o políticas de seguridad del PACS bloquean peticiones externas',
+            'El recurso requiere privilegios de administrador del PACS',
+          ],
+          fixes: [
+            'En el PACS: asigne permisos de lectura y escritura DICOM al usuario del Gateway',
+            'Agregue la IP de este Gateway a la whitelist del PACS (si aplica)',
+            'Consulte con el administrador del PACS sobre los roles necesarios',
+            'Revise la configuración CORS del PACS para permitir peticiones del Gateway',
+          ],
+          technical: { httpStatus: '403', statusText, endpoint: ep, url, pacsType, timestamp: new Date().toISOString() },
+        };
+      case 404: {
+        if (pacsType === 'orthanc') {
+          return {
+            code: 'GW-CFG-001', severity: 'error',
+            title: 'Endpoint No Encontrado (404) — ¿Tipo PACS Incorrecto?',
+            detail: `El endpoint Orthanc /system no existe en ${url}. Esto sugiere que el servidor NO es Orthanc REST API.`,
+            causes: [
+              `El servidor en ${url} NO es Orthanc — es otro tipo de PACS`,
+              'Posiblemente es DICOMweb (FUJIFILM Synapse, DCM4CHEE, Google Health API, Horos, etc.)',
+              'La URL base es incorrecta o tiene un path extra que no debería',
+              'Orthanc está instalado pero responde en un puerto o path diferente',
+            ],
+            fixes: [
+              '🔄 RECOMENDADO: Cambie el tipo de PACS a "DICOMweb" si su servidor soporta STOW/QIDO/WADO',
+              `Verifique accediendo desde el navegador: ${url}/system (debe devolver JSON con Orthanc version)`,
+              'Si es Orthanc: la URL estándar es http://HOST:8042 (sin path adicional)',
+              'Consulte con TI sobre el tipo exacto de PACS instalado en el centro',
+            ],
+            technical: { httpStatus: '404', statusText, testedEndpoint: ep, url, pacsType, suggestedType: 'dicomweb', timestamp: new Date().toISOString() },
+          };
+        }
+        return {
+          code: 'GW-HTTP-404', severity: 'error',
+          title: 'Endpoint No Encontrado (HTTP 404)',
+          detail: `El path ${ep} no existe en el servidor PACS (${label}).`,
+          causes: [
+            `Los endpoints DICOMweb configurados no coinciden con los de su PACS (${label})`,
+            'La URL base tiene un path de más o le falta un prefijo',
+            'El servidor PACS no expone los endpoints en los paths estándar DICOMweb',
+          ],
+          fixes: [
+            `Verifique los paths DICOMweb en la documentación de su PACS (${label})`,
+            'Paths comunes: /dicom-web, /wado-rs, /rs, /dcm4chee-arc/aets/DCM4CHEE/rs',
+            `Pruebe el endpoint completo en el navegador: ${ep}`,
+            'Consulte con el administrador del PACS sobre los paths correctos',
+          ],
+          technical: { httpStatus: '404', statusText, testedEndpoint: ep, url, pacsType, timestamp: new Date().toISOString() },
+        };
+      }
+      case 405:
+        return {
+          code: 'GW-HTTP-405', severity: 'info',
+          title: 'Método No Permitido (405) — Endpoint Válido',
+          detail: `El endpoint ${ep} existe pero no acepta el método HTTP del test. Esto generalmente indica que la configuración es CORRECTA.`,
+          causes: [
+            'El test usó OPTIONS pero el PACS solo acepta POST en STOW (comportamiento normal)',
+            'El PACS no implementa preflight CORS (OPTIONS)',
+          ],
+          fixes: [
+            '✅ Este resultado es generalmente positivo — confirma que el endpoint existe',
+            'Para verificación completa: envíe un estudio real a través del Gateway',
+          ],
+          technical: { httpStatus: '405', statusText, endpoint: ep, url, pacsType, note: 'Método de test no soportado, endpoint probablemente válido', timestamp: new Date().toISOString() },
+        };
+      case 500:
+        return {
+          code: 'GW-HTTP-500', severity: 'error',
+          title: 'Error Interno del PACS (HTTP 500)',
+          detail: `El PACS (${label}) respondió con un error interno. El problema está en el PACS, no en el Gateway.`,
+          causes: [
+            'Error interno en el software PACS (bug, excepción no manejada)',
+            'La base de datos del PACS tiene problemas (corrupción, llenura)',
+            'El PACS se quedó sin espacio en disco',
+            'Conflicto de configuración interna del PACS',
+          ],
+          fixes: [
+            'Revise los logs internos del PACS para identificar la causa del error 500',
+            'Reinicie el servicio PACS si es seguro hacerlo',
+            'Verifique espacio en disco y estado de la DB del PACS',
+            'Contacte al soporte técnico del fabricante del PACS',
+          ],
+          technical: { httpStatus: '500', statusText, endpoint: ep, url, pacsType, timestamp: new Date().toISOString() },
+        };
+      case 502:
+        return {
+          code: 'GW-HTTP-502', severity: 'error',
+          title: 'Bad Gateway — Proxy No Alcanza al PACS (HTTP 502)',
+          detail: `Un reverse proxy (Nginx, Apache, HAProxy) frente al PACS no pudo comunicarse con el servicio PACS real.`,
+          causes: [
+            'Hay un reverse proxy frente al PACS y el backend PACS está caído',
+            'El proxy tiene configuración incorrecta de upstream (dirección/puerto del PACS)',
+            'El servicio PACS se reinició y el proxy aún intenta conectar al proceso antiguo',
+          ],
+          fixes: [
+            'Verifique que el servicio PACS esté corriendo detrás del proxy',
+            'Revise la configuración upstream del reverse proxy',
+            'Si no debería haber proxy: verifique que la URL apunte directamente al PACS',
+            'Pruebe conectar directamente al PACS (sin proxy) para aislar el problema',
+          ],
+          technical: { httpStatus: '502', statusText, endpoint: ep, url, pacsType, timestamp: new Date().toISOString() },
+        };
+      case 503:
+        return {
+          code: 'GW-HTTP-503', severity: 'warning',
+          title: 'Servicio No Disponible — Temporalmente (HTTP 503)',
+          detail: `El PACS respondió pero el servicio está temporalmente no disponible. Puede estar en mantenimiento o arrancando.`,
+          causes: [
+            'El PACS está en proceso de inicio (aún no está listo)',
+            'El PACS está en modo de mantenimiento programado',
+            'El PACS está sobrecargado y rechaza nuevas conexiones',
+            'Actualización de software del PACS en progreso',
+          ],
+          fixes: [
+            '⏳ Espere 2-5 minutos y vuelva a intentar el test',
+            'Verifique si hay mantenimiento programado en el PACS',
+            'Consulte el estado del PACS con el administrador del sistema',
+            'Revise los logs del PACS para mensajes de "ready" o "started"',
+          ],
+          technical: { httpStatus: '503', statusText, endpoint: ep, url, pacsType, timestamp: new Date().toISOString() },
+        };
+      case 504:
+        return {
+          code: 'GW-HTTP-504', severity: 'error',
+          title: 'Gateway Timeout — Proxy Sin Respuesta (HTTP 504)',
+          detail: `Un proxy/load-balancer intermedio no recibió respuesta del PACS dentro de su timeout configurado.`,
+          causes: [
+            'El PACS tardó demasiado en responder y el proxy cortó la espera',
+            'El timeout del proxy/LB es demasiado corto para operaciones PACS',
+            'Problemas de red entre el proxy y el backend PACS',
+          ],
+          fixes: [
+            'Aumente el proxy_read_timeout (Nginx) o ProxyTimeout (Apache)',
+            'Verifique la conectividad entre el proxy y el PACS directamente',
+            'Pruebe conectar al PACS sin pasar por el proxy para descartar',
+          ],
+          technical: { httpStatus: '504', statusText, endpoint: ep, url, pacsType, timestamp: new Date().toISOString() },
+        };
+      default: {
+        const severity = status >= 500 ? 'error' : status >= 400 ? 'warning' : 'info';
+        return {
+          code: `GW-HTTP-${status}`, severity,
+          title: `Respuesta HTTP ${status} — ${statusText}`,
+          detail: `El PACS respondió con código ${status}. Este no es un código esperado para esta operación.`,
+          causes: [
+            `Comportamiento no estándar del PACS (${label})`,
+            'Proxy, WAF o CDN interceptando la petición',
+            'Configuración incorrecta de endpoints',
+          ],
+          fixes: [
+            `Consulte la documentación de su PACS (${label}) para este endpoint`,
+            `Pruebe accediendo directamente: ${ep}`,
+            `Revise los logs del PACS para entender el código ${status}`,
+          ],
+          technical: { httpStatus: String(status), statusText, endpoint: ep, url, pacsType, timestamp: new Date().toISOString() },
+        };
       }
     }
-    // DNS resolution
-    else if (/ENOTFOUND|getaddrinfo/i.test(msg)) {
-      const target = context.url || context.host || '';
-      hint = `No se puede resolver el hostname. Verifique que la dirección "${target}" sea correcta y accesible desde este equipo.`;
-    }
-    // Timeout
-    else if (/timeout|ETIMEDOUT|ESOCKETTIMEDOUT/i.test(msg)) {
-      hint = `La conexión tardó demasiado (>10s). Posibles causas: firewall bloqueando, IP incorrecta, o el PACS está sobrecargado.`;
-    }
-    // SSL/TLS
-    else if (/SELF_SIGNED|CERT|SSL|TLS|UNABLE_TO_VERIFY/i.test(msg)) {
-      hint = `Error de certificado SSL/TLS. Si el PACS usa certificado auto-firmado, configure NODE_TLS_REJECT_UNAUTHORIZED=0 en el .env (solo desarrollo).`;
-    }
-    // Network unreachable
-    else if (/ENETUNREACH|EHOSTUNREACH|NETWORK/i.test(msg)) {
-      hint = `Red inalcanzable. Verifique que este equipo tiene acceso a la red donde está el PACS.`;
-    }
-    // Port in use / permission
-    else if (/EACCES|EADDRINUSE/i.test(msg)) {
-      hint = `Error de permisos o puerto en uso. Verifique que el puerto no esté ocupado por otro servicio.`;
-    }
-    // Abort
-    else if (/abort/i.test(msg)) {
-      hint = `La petición fue cancelada. Posible timeout de red.`;
-    }
-    // Generic
-    else {
-      hint = `Error inesperado. Verifique que la configuración de PACS tipo "${label}" sea correcta.`;
-    }
-
-    return { error: msg, hint };
   }
 
   // POST /api/config/test-pacs - Probar conexion PACS
@@ -299,27 +865,42 @@ export async function configRoutes(fastify: FastifyInstance): Promise<void> {
       if (pacsType === 'dicom-native') {
         const host = s.pacsDicomHost || config.pacsDicomHost;
         const port = s.pacsDicomPort || config.pacsDicomPort;
-        return reply.send({
-          success: false,
-          error: `Este test es para PACS HTTP — su configuración actual es "${label}"`,
-          hint: host
-            ? `Use el botón "Test Conexión TCP" en la sección DICOM Nativo para probar ${host}:${port}.`
-            : `Configure el Host/IP del PACS en la sección DICOM Nativo y use "Test Conexión TCP".`,
-          pacsType,
-          pacsTypeLabel: label
-        });
+        const diag: DiagnosticResult = {
+          code: 'GW-CFG-002',
+          severity: 'warning',
+          title: 'Test HTTP No Aplica — Tipo DICOM Nativo',
+          detail: `Este test valida conectividad HTTP, pero su configuración actual es "${label}" que usa protocolo TCP/DICOM, no HTTP.`,
+          causes: [
+            `El tipo de PACS está configurado como "${label}" que no usa endpoints HTTP`,
+            'Los tests HTTP (GET /system, QIDO-RS) solo aplican para Orthanc REST API o DICOMweb',
+          ],
+          fixes: host
+            ? [`Use el botón "🔌 Test Conexión TCP" para probar ${host}:${port}`, 'Si su PACS también soporta DICOMweb: cambie el tipo a "DICOMweb" y configure la URL HTTP']
+            : ['Configure el Host/IP del PACS en la sección DICOM Nativo', 'Use el botón "🔌 Test Conexión TCP" después de configurar'],
+          technical: { pacsType, pacsLabel: label, host: host || 'no-configurado', port: String(port || ''), timestamp: new Date().toISOString() },
+        };
+        return reply.send({ success: false, diagnostic: diag, pacsType, pacsTypeLabel: label });
       }
       
       // Validate URL
-      if (!pacsUrl || pacsUrl === 'http://localhost:8042' && pacsType === 'dicomweb') {
-        return reply.send({
-          success: false,
-          error: 'URL del PACS no configurada o usando valor por defecto de Orthanc',
-          hint: `Tiene seleccionado "${label}" pero la URL es "${pacsUrl}". Ingrese la URL correcta de su PACS.`,
-          pacsType,
-          pacsTypeLabel: label,
-          pacsUrl
-        });
+      if (!pacsUrl || (pacsUrl === 'http://localhost:8042' && pacsType === 'dicomweb')) {
+        const diag: DiagnosticResult = {
+          code: 'GW-CFG-003',
+          severity: 'warning',
+          title: 'URL del PACS No Configurada',
+          detail: `La URL del PACS ${pacsUrl ? `es "${pacsUrl}" (valor por defecto de Orthanc)` : 'está vacía'} pero el tipo seleccionado es "${label}".`,
+          causes: [
+            'La URL del PACS no ha sido configurada (aún tiene el valor por defecto)',
+            `El tipo "${label}" requiere una URL HTTP válida para su PACS`,
+          ],
+          fixes: [
+            `Ingrese la URL real de su PACS en el campo "URL del PACS" (ej: http://192.168.1.50:8042)`,
+            'Consulte con TI la URL/IP y puerto del servidor PACS del centro',
+            pacsType === 'dicomweb' ? 'Para DICOMweb típico: http://HOST:PORT/dicom-web' : 'Para Orthanc típico: http://HOST:8042',
+          ],
+          technical: { pacsType, pacsLabel: label, currentUrl: pacsUrl || 'vacío', timestamp: new Date().toISOString() },
+        };
+        return reply.send({ success: false, diagnostic: diag, pacsType, pacsTypeLabel: label, pacsUrl });
       }
       
       try {
@@ -345,47 +926,58 @@ export async function configRoutes(fastify: FastifyInstance): Promise<void> {
         const latency = Date.now() - startTime;
         
         if (response.ok || response.status === 204) {
+          // Try to extract useful info from response body
+          let serverInfo = '';
+          try {
+            const body = await response.text();
+            if (pacsType === 'orthanc') {
+              const json = JSON.parse(body);
+              if (json.Version) serverInfo = `Orthanc v${json.Version}`;
+              if (json.DicomAet) serverInfo += ` | AET: ${json.DicomAet}`;
+            } else if (body) {
+              serverInfo = `Respuesta: ${body.length} bytes`;
+            }
+          } catch { /* ignore body parse errors */ }
+          
+          const diag: DiagnosticResult = {
+            code: 'GW-OK-200',
+            severity: 'info',
+            title: 'Conexión Exitosa',
+            detail: `El PACS (${label}) respondió correctamente en ${latency}ms.${serverInfo ? ' ' + serverInfo : ''}`,
+            causes: [],
+            fixes: [],
+            technical: { httpStatus: String(response.status), latency: `${latency}ms`, endpoint: testDescription, url: testUrl, pacsType, serverInfo: serverInfo || '-', timestamp: new Date().toISOString() },
+          };
           return reply.send({
             success: true,
             message: `✅ Conexión exitosa a ${label} (${latency}ms)`,
+            diagnostic: diag,
             endpoint: testDescription,
             status: response.status,
+            latency,
             pacsType,
             pacsTypeLabel: label,
-            pacsUrl
+            pacsUrl,
+            serverInfo: serverInfo || undefined,
           });
         } else {
-          // Detect misconfig: Orthanc /system returns 404 → probably not Orthanc
-          let hint = '';
-          if (pacsType === 'orthanc' && response.status === 404) {
-            hint = `El endpoint /system respondió 404. Esto indica que el servidor probablemente NO es Orthanc. Si es FUJIFILM Synapse, DCM4CHEE u otro PACS DICOMweb, cambie el tipo a "DICOMweb" en la configuración.`;
-          } else if (response.status === 401 || response.status === 403) {
-            hint = `Acceso denegado. Verifique las credenciales de autenticación (${s.pacsAuthType || config.pacsAuthType}). Si el PACS requiere usuario/contraseña, configúrelos en la sección de autenticación.`;
-          } else if (response.status === 404) {
-            hint = `Endpoint no encontrado. Verifique que la URL base "${pacsUrl}" sea correcta y que los paths DICOMweb coincidan con su PACS.`;
-          } else if (response.status === 502 || response.status === 503) {
-            hint = `El servidor respondió pero el servicio PACS no está disponible. Puede estar iniciando o en mantenimiento.`;
-          } else {
-            hint = `Respuesta inesperada del PACS. Verifique que la configuración tipo "${label}" coincida con su servidor real.`;
-          }
-          
+          const diag = diagnoseHttpStatus(response.status, response.statusText, { pacsType, url: pacsUrl, endpoint: testUrl, label, latency: Date.now() - startTime });
           return reply.send({
             success: false,
-            error: `HTTP ${response.status} - ${response.statusText}`,
-            hint,
+            diagnostic: diag,
             endpoint: testDescription,
             testedUrl: testUrl,
             pacsType,
             pacsTypeLabel: label,
-            pacsUrl
+            pacsUrl,
+            latency: Date.now() - startTime,
           });
         }
       } catch (error) {
         const diag = diagnoseError(error, { pacsType, url: pacsUrl });
         return reply.send({
           success: false,
-          error: `Error conectando a ${label}: ${diag.error}`,
-          hint: diag.hint,
+          diagnostic: diag,
           pacsType,
           pacsTypeLabel: label,
           pacsUrl
@@ -406,13 +998,22 @@ export async function configRoutes(fastify: FastifyInstance): Promise<void> {
       
       // Block test if type is dicom-native
       if (pacsType === 'dicom-native') {
-        return reply.send({
-          success: false,
-          error: `STOW-RS no aplica para "${label}"`,
-          hint: 'El envío de imágenes en DICOM Nativo usa C-STORE (TCP), no STOW-RS (HTTP). Use "Test Conexión TCP" en la sección DICOM Nativo.',
-          pacsType,
-          pacsTypeLabel: label
-        });
+        const diag: DiagnosticResult = {
+          code: 'GW-CFG-004',
+          severity: 'warning',
+          title: 'STOW-RS No Aplica — Tipo DICOM Nativo',
+          detail: `STOW-RS es un protocolo HTTP para envío de imágenes. Su configuración actual es "${label}" que usa C-STORE (protocolo TCP/DICOM), no HTTP.`,
+          causes: [
+            'El tipo DICOM Nativo envía imágenes via C-STORE sobre TCP, no STOW-RS sobre HTTP',
+            'Este test solo aplica para tipos "Orthanc REST API" o "DICOMweb"',
+          ],
+          fixes: [
+            'Use "🔌 Test Conexión TCP" para validar la conexión DICOM Nativa',
+            'Si su PACS también soporta DICOMweb: cambie el tipo y configure STOW endpoint',
+          ],
+          technical: { pacsType, pacsLabel: label, protocol: 'C-STORE (TCP) vs STOW-RS (HTTP)', timestamp: new Date().toISOString() },
+        };
+        return reply.send({ success: false, diagnostic: diag, pacsType, pacsTypeLabel: label });
       }
       
       try {
@@ -422,10 +1023,10 @@ export async function configRoutes(fastify: FastifyInstance): Promise<void> {
         
         if (pacsType === 'orthanc') {
           testUrl = `${pacsUrl}/instances`;
-          testDescription = `${label} → POST /instances`;
+          testDescription = `${label} → POST /instances (via OPTIONS)`;
         } else {
           testUrl = `${pacsUrl}${stowPath}`;
-          testDescription = `${label} → STOW-RS ${stowPath}`;
+          testDescription = `${label} → STOW-RS ${stowPath} (via OPTIONS)`;
         }
         
         const response = await fetch(testUrl, {
@@ -437,43 +1038,56 @@ export async function configRoutes(fastify: FastifyInstance): Promise<void> {
         const latency = Date.now() - startTime;
         
         if (response.ok || response.status === 405 || response.status === 204) {
+          const isMethodNotAllowed = response.status === 405;
+          const diag: DiagnosticResult = {
+            code: isMethodNotAllowed ? 'GW-HTTP-405' : 'GW-OK-200',
+            severity: 'info',
+            title: isMethodNotAllowed ? 'Endpoint STOW Existe (405 — normal)' : 'Endpoint STOW Accesible',
+            detail: isMethodNotAllowed
+              ? `El endpoint STOW respondió 405 (Method Not Allowed) al test OPTIONS. Esto confirma que el endpoint EXISTE y funciona — solo rechaza el método de prueba.`
+              : `El endpoint STOW respondió ${response.status} correctamente en ${latency}ms.`,
+            causes: [],
+            fixes: isMethodNotAllowed
+              ? ['✅ El endpoint existe y está listo para recibir imágenes DICOM via POST', 'Para verificación completa: envíe un estudio real a través del Gateway']
+              : [],
+            technical: { httpStatus: String(response.status), latency: `${latency}ms`, endpoint: testDescription, stowUrl: testUrl, pacsType, timestamp: new Date().toISOString() },
+          };
           return reply.send({
             success: true,
-            message: `✅ Endpoint STOW accesible en ${label} (${latency}ms)`,
+            message: `✅ Endpoint STOW accesible en ${label} (${latency}ms)${isMethodNotAllowed ? ' [405=endpoint válido]' : ''}`,
+            diagnostic: diag,
             endpoint: testDescription,
             stowUrl: testUrl,
             status: response.status,
+            latency,
             pacsType,
             pacsTypeLabel: label
           });
         } else {
-          let hint = '';
+          const diag = diagnoseHttpStatus(response.status, response.statusText, { pacsType, url: pacsUrl, endpoint: testUrl, label, latency: Date.now() - startTime });
+          // Enrich for STOW-specific context
           if (response.status === 404) {
-            hint = pacsType === 'orthanc'
-              ? `El endpoint /instances no existe. Verifique que la URL "${pacsUrl}" apunta a un Orthanc real. Si es otro tipo de PACS, cambie el tipo en la configuración.`
-              : `El path STOW "${stowPath}" no existe en ${pacsUrl}. Verifique que el path sea correcto para su PACS (${label}).`;
-          } else if (response.status === 401 || response.status === 403) {
-            hint = `Sin autorización para STOW. Verifique credenciales y permisos de escritura en el PACS.`;
-          } else {
-            hint = `Respuesta inesperada. Confirme que el tipo "${label}" y URL "${pacsUrl}" son correctos.`;
+            diag.detail = pacsType === 'orthanc'
+              ? `El endpoint /instances no existe en ${pacsUrl}. Esto puede indicar que el servidor NO es Orthanc.`
+              : `El path STOW "${stowPath}" no existe en ${pacsUrl}. Verifique el path correcto para su PACS (${label}).`;
+            diag.fixes.push(`Path STOW estándar para DCM4CHEE: /dcm4chee-arc/aets/DCM4CHEE/rs/studies`);
+            diag.fixes.push(`Path STOW estándar para Orthanc con DICOMweb plugin: /dicom-web/studies`);
           }
-          
           return reply.send({
             success: false,
-            error: `HTTP ${response.status} - ${response.statusText}`,
-            hint,
+            diagnostic: diag,
             endpoint: testDescription,
             stowUrl: testUrl,
             pacsType,
-            pacsTypeLabel: label
+            pacsTypeLabel: label,
+            latency: Date.now() - startTime,
           });
         }
       } catch (error) {
         const diag = diagnoseError(error, { pacsType, url: pacsUrl });
         return reply.send({
           success: false,
-          error: `Error conectando a ${label} (STOW): ${diag.error}`,
-          hint: diag.hint,
+          diagnostic: diag,
           stowUrl: `${pacsUrl}${stowPath}`,
           pacsType,
           pacsTypeLabel: label
@@ -499,9 +1113,26 @@ export async function configRoutes(fastify: FastifyInstance): Promise<void> {
         
         if (result.success) {
           const itemCount = result.items.length;
+          const diag: DiagnosticResult = {
+            code: 'GW-OK-200',
+            severity: 'info',
+            title: 'Worklist Operativo',
+            detail: `Se encontraron ${itemCount} item${itemCount !== 1 ? 's' : ''} en ${latency}ms desde ${result.source}.`,
+            causes: [],
+            fixes: itemCount === 0 ? ['El worklist está vacío — esto puede ser normal si no hay procedimientos agendados para hoy'] : [],
+            technical: {
+              source: result.source || '-',
+              itemCount: String(itemCount),
+              totalAvailable: String(result.total || itemCount),
+              latency: `${latency}ms`,
+              pacsType,
+              timestamp: new Date().toISOString(),
+            },
+          };
           return reply.send({
             success: true,
             message: `✅ Worklist OK — ${itemCount} item${itemCount !== 1 ? 's' : ''} encontrado${itemCount !== 1 ? 's' : ''} (${latency}ms)`,
+            diagnostic: diag,
             source: result.source,
             itemCount,
             totalAvailable: result.total || itemCount,
@@ -519,27 +1150,103 @@ export async function configRoutes(fastify: FastifyInstance): Promise<void> {
             }))
           });
         } else {
-          let hint = '';
           const errMsg = result.error || 'No se pudo consultar el Worklist';
+          let diag: DiagnosticResult;
           
           if (/404/i.test(errMsg)) {
-            hint = `El endpoint de worklist no existe en el PACS. Verifique que los paths UPS-RS / MWL sean correctos para su PACS tipo "${label}".`;
+            diag = {
+              code: 'GW-WL-001',
+              severity: 'error',
+              title: 'Endpoint de Worklist No Encontrado (404)',
+              detail: `El endpoint de worklist no existe en el PACS. Los paths UPS-RS / MWL configurados no son válidos para su PACS.`,
+              causes: [
+                'Los paths de Worklist no coinciden con la configuración del PACS',
+                `Su PACS (${label}) puede usar paths diferentes a los estándar`,
+                'El PACS no tiene habilitado el módulo de Worklist',
+              ],
+              fixes: [
+                'Verifique los paths de UPS-RS y MWL en la documentación de su PACS',
+                'Paths UPS-RS comunes: /workitems, /ups-rs/workitems',
+                'Paths MWL comunes: /mwl, /modalities/WORKLIST/query',
+                'Consulte con el administrador del PACS si el Worklist está habilitado',
+              ],
+              technical: { errorMsg: errMsg, source: result.source || '-', pacsType, pacsLabel: label, timestamp: new Date().toISOString() },
+            };
           } else if (/401|403|unauthorized/i.test(errMsg)) {
-            hint = `Sin autorización para consultar Worklist. Verifique credenciales.`;
+            diag = {
+              code: 'GW-AUTH-003',
+              severity: 'critical',
+              title: 'Sin Autorización para Worklist',
+              detail: `Las credenciales del Gateway no tienen permiso para consultar el Worklist en el PACS.`,
+              causes: [
+                'El usuario PACS no tiene permisos para consultar el Worklist',
+                'Las credenciales están incorrectas o vacías',
+                'El tipo de autenticación no coincide con lo que requiere el PACS',
+              ],
+              fixes: [
+                'Verifique las credenciales en la sección "Autenticación PACS"',
+                'Confirme que el usuario tiene permisos de lectura de Worklist en el PACS',
+                'Pruebe las credenciales directamente en el PACS o navegador',
+              ],
+              technical: { errorMsg: errMsg, source: result.source || '-', pacsType, pacsLabel: label, timestamp: new Date().toISOString() },
+            };
           } else if (/ECONNREFUSED/i.test(errMsg)) {
-            hint = `No se pudo conectar a ${pacsUrl}. Verifique que el PACS (${label}) esté corriendo.`;
+            diag = diagnoseError(new Error(errMsg), { pacsType, url: pacsUrl });
           } else if (pacsType === 'dicom-native') {
-            hint = `El worklist HTTP no aplica para DICOM Nativo. La MWL se consulta por C-FIND (TCP) — verifique la config de conexión TCP.`;
+            diag = {
+              code: 'GW-WL-002',
+              severity: 'warning',
+              title: 'Worklist HTTP No Aplica — Tipo DICOM Nativo',
+              detail: `El worklist HTTP (UPS-RS/MWL) no aplica para DICOM Nativo. La MWL se consulta por C-FIND (TCP).`,
+              causes: [
+                'El tipo DICOM Nativo usa C-FIND para consultar la Modality Worklist, no endpoints HTTP',
+                'El Gateway actualmente no implementa C-FIND MWL sobre TCP',
+              ],
+              fixes: [
+                'Si su PACS también expone worklist via HTTP: configure el tipo como "DICOMweb" o "Orthanc"',
+                'Consulte si su PACS tiene API REST además de DICOM nativo',
+              ],
+              technical: { pacsType, pacsLabel: label, protocol: 'C-FIND (TCP) vs UPS-RS/MWL (HTTP)', timestamp: new Date().toISOString() },
+            };
           } else if (result.source === 'mock') {
-            hint = `El worklist está en modo MOCK (datos de prueba). Para conectar al PACS real, cambie WORKLIST_MODE a "pacs" en la configuración.`;
+            diag = {
+              code: 'GW-WL-003',
+              severity: 'warning',
+              title: 'Worklist en Modo MOCK (Datos de Prueba)',
+              detail: `El worklist devolvió datos de prueba (mock). No está conectado al PACS real.`,
+              causes: [
+                'WORKLIST_MODE está en "mock" (datos ficticios para desarrollo)',
+                'Los endpoints de worklist no están configurados correctamente',
+              ],
+              fixes: [
+                'Cambie WORKLIST_MODE a "pacs" en la configuración para conectar al PACS real',
+                'Configure los paths correctos de UPS-RS / MWL para su PACS',
+              ],
+              technical: { source: 'mock', pacsType, pacsLabel: label, timestamp: new Date().toISOString() },
+            };
           } else {
-            hint = `Verifique que su PACS (${label}) soporte Worklist y que los endpoints estén configurados correctamente.`;
+            diag = {
+              code: 'GW-WL-004',
+              severity: 'error',
+              title: 'Error en Consulta de Worklist',
+              detail: `No se pudo obtener el worklist desde ${label}: ${errMsg}`,
+              causes: [
+                `El PACS (${label}) no soporta Worklist o no está habilitado`,
+                'Los endpoints de worklist están mal configurados',
+                'Error de comunicación con el PACS',
+              ],
+              fixes: [
+                'Verifique que su PACS soporte Worklist (UPS-RS o MWL)',
+                'Confirme los endpoints correctos con la documentación de su PACS',
+                'Pruebe la conexión PACS básica primero (Test HTTP o Test TCP)',
+              ],
+              technical: { errorMsg: errMsg, source: result.source || '-', pacsType, pacsLabel: label, timestamp: new Date().toISOString() },
+            };
           }
           
           return reply.send({
             success: false,
-            error: errMsg,
-            hint,
+            diagnostic: diag,
             source: result.source,
             pacsType,
             pacsTypeLabel: label,
@@ -550,8 +1257,7 @@ export async function configRoutes(fastify: FastifyInstance): Promise<void> {
         const diag = diagnoseError(error, { pacsType, url: pacsUrl });
         return reply.send({
           success: false,
-          error: `Error en Worklist (${label}): ${diag.error}`,
-          hint: diag.hint,
+          diagnostic: diag,
           pacsType,
           pacsTypeLabel: label
         });
@@ -570,10 +1276,36 @@ export async function configRoutes(fastify: FastifyInstance): Promise<void> {
       const callingAet = s.gatewayAeTitle || config.gatewayAeTitle;
       
       if (!host) {
-        return reply.send({ success: false, error: 'PACS Host/IP no configurado' });
+        const diag: DiagnosticResult = {
+          code: 'GW-CFG-005',
+          severity: 'warning',
+          title: 'Host/IP del PACS No Configurado',
+          detail: `El campo "Host/IP del PACS" está vacío. Se requiere una dirección para probar la conexión TCP.`,
+          causes: ['El host/IP del PACS DICOM no ha sido configurado en la sección DICOM Nativo'],
+          fixes: [
+            'Ingrese la IP o hostname del PACS en el campo "Host / IP del PACS"',
+            'Ejemplo: 192.168.1.100 o pacs.hospital.local',
+            'Consulte con TI la IP del servidor PACS del centro',
+          ],
+          technical: { field: 'pacsDicomHost', value: 'vacío', pacsType: 'dicom-native', timestamp: new Date().toISOString() },
+        };
+        return reply.send({ success: false, diagnostic: diag });
       }
       if (!calledAet) {
-        return reply.send({ success: false, error: 'PACS AE Title no configurado' });
+        const diag: DiagnosticResult = {
+          code: 'GW-CFG-006',
+          severity: 'warning',
+          title: 'AE Title del PACS No Configurado',
+          detail: `El campo "AE Title del PACS" está vacío. Se requiere para la asociación DICOM.`,
+          causes: ['El AE Title del PACS no ha sido configurado en la sección DICOM Nativo'],
+          fixes: [
+            'Ingrese el AE Title del PACS (ej: SYNAPSE, DCM4CHEE, ORTHANC, CONQUEST)',
+            'El AE Title es un identificador único del PACS — consulte con el administrador del PACS',
+            'Normalmente se configura en el PACS al registrar nodos DICOM',
+          ],
+          technical: { field: 'pacsAeTitle', value: 'vacío', pacsType: 'dicom-native', timestamp: new Date().toISOString() },
+        };
+        return reply.send({ success: false, diagnostic: diag });
       }
       
       try {
@@ -583,7 +1315,7 @@ export async function configRoutes(fastify: FastifyInstance): Promise<void> {
           const socket = new net.default.Socket();
           const timeout = setTimeout(() => {
             socket.destroy();
-            resolve({ success: false, error: `Timeout conectando a ${host}:${port} (>5s)` });
+            resolve({ success: false, error: `Timeout conectando a ${host}:${port} (>5s) — el puerto no responde` });
           }, 5000);
           
           socket.connect(port, host, () => {
@@ -601,25 +1333,41 @@ export async function configRoutes(fastify: FastifyInstance): Promise<void> {
         const latency = Date.now() - startTime;
         
         if (result.success) {
+          const diag: DiagnosticResult = {
+            code: 'GW-OK-TCP',
+            severity: 'info',
+            title: 'Conexión TCP Exitosa',
+            detail: `El puerto ${port} está abierto y acepta conexiones en ${host}. Latencia: ${latency}ms.`,
+            causes: [],
+            fixes: [
+              '✅ La conexión TCP es exitosa. Asegúrese de que:',
+              `El AE Title "${callingAet}" (Gateway) esté registrado/permitido en la configuración del PACS`,
+              `El AE Title "${calledAet}" sea correcto para el PACS destino`,
+              'Para test completo de A-ASSOCIATE: envíe un C-ECHO real con herramientas DICOM (echoscu, storescu)',
+            ],
+            technical: {
+              host, port: String(port),
+              callingAet: callingAet || '-', calledAet: calledAet || '-',
+              latency: `${latency}ms`, protocol: 'TCP',
+              pacsType: 'dicom-native', pacsLabel: 'DICOM Nativo (TCP)',
+              note: 'TCP connect exitoso. El PACS acepta conexiones. Para validación DICOM completa, registre los AE Titles mutuamente.',
+              timestamp: new Date().toISOString(),
+            },
+          };
           return reply.send({
             success: true,
             message: `✅ TCP OK — Puerto ${port} accesible en ${host} (${latency}ms)`,
+            diagnostic: diag,
             pacsType: 'dicom-native',
             pacsTypeLabel: getPacsTypeLabel('dicom-native'),
-            details: {
-              host,
-              port,
-              callingAet,
-              calledAet,
-              note: 'Conexión TCP exitosa. El PACS acepta conexiones en este puerto. Asegúrese de que el AE Title del Gateway esté registrado en el PACS.'
-            }
+            latency,
+            details: { host, port, callingAet, calledAet },
           });
         } else {
           const diag = diagnoseError(new Error(result.error || ''), { pacsType: 'dicom-native', host, port });
           return reply.send({
             success: false,
-            error: `Error TCP a ${host}:${port} — ${result.error}`,
-            hint: diag.hint,
+            diagnostic: diag,
             pacsType: 'dicom-native',
             pacsTypeLabel: getPacsTypeLabel('dicom-native'),
             details: { host, port, callingAet, calledAet }
@@ -629,8 +1377,7 @@ export async function configRoutes(fastify: FastifyInstance): Promise<void> {
         const diag = diagnoseError(error, { pacsType: 'dicom-native', host, port });
         return reply.send({
           success: false,
-          error: `Error en test TCP: ${diag.error}`,
-          hint: diag.hint,
+          diagnostic: diag,
           pacsType: 'dicom-native',
           pacsTypeLabel: getPacsTypeLabel('dicom-native')
         });
@@ -725,6 +1472,34 @@ function generateConfigHtml(): string {
     .alert-info { background: #dbeafe; color: #1e40af; }
     #status { display: none; }
     .test-result { padding: 12px; background: #f9fafb; border-radius: 8px; margin-top: 12px; font-family: monospace; font-size: 13px; white-space: pre-wrap; }
+    /* --- Diagnostic Rich Error Display --- */
+    .diag-box { border-radius: 10px; margin-top: 12px; overflow: hidden; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; border: 1px solid #e5e7eb; }
+    .diag-header { padding: 12px 16px; display: flex; align-items: center; gap: 10px; }
+    .diag-header.critical { background: #fef2f2; border-bottom: 2px solid #ef4444; }
+    .diag-header.error { background: #fff7ed; border-bottom: 2px solid #f97316; }
+    .diag-header.warning { background: #fefce8; border-bottom: 2px solid #eab308; }
+    .diag-header.info { background: #f0fdf4; border-bottom: 2px solid #22c55e; }
+    .diag-code { font-family: monospace; font-size: 11px; font-weight: 700; padding: 3px 8px; border-radius: 4px; white-space: nowrap; }
+    .diag-header.critical .diag-code { background: #fee2e2; color: #991b1b; }
+    .diag-header.error .diag-code { background: #ffedd5; color: #9a3412; }
+    .diag-header.warning .diag-code { background: #fef9c3; color: #854d0e; }
+    .diag-header.info .diag-code { background: #dcfce7; color: #166534; }
+    .diag-title { font-size: 14px; font-weight: 600; color: #1f2937; }
+    .diag-body { padding: 14px 16px; background: white; font-size: 13px; line-height: 1.6; }
+    .diag-detail { margin-bottom: 12px; color: #374151; }
+    .diag-section { margin-bottom: 10px; }
+    .diag-section-title { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: #6b7280; margin-bottom: 6px; }
+    .diag-section ul, .diag-section ol { margin: 0; padding-left: 20px; }
+    .diag-section li { margin-bottom: 4px; color: #374151; font-size: 13px; }
+    .diag-section.causes li::marker { color: #f97316; }
+    .diag-section.fixes li::marker { color: #22c55e; }
+    .diag-tech { background: #f3f4f6; border-radius: 6px; padding: 10px 14px; font-family: monospace; font-size: 11px; color: #4b5563; cursor: pointer; }
+    .diag-tech-toggle { font-size: 12px; color: #6b7280; cursor: pointer; user-select: none; display: flex; align-items: center; gap: 6px; margin-top: 8px; }
+    .diag-tech-toggle:hover { color: #374151; }
+    .diag-tech-content { display: none; margin-top: 6px; }
+    .diag-tech-content.open { display: block; }
+    .diag-copy { font-size: 11px; color: #6b7280; background: #e5e7eb; border: none; padding: 3px 10px; border-radius: 4px; cursor: pointer; margin-top: 6px; float: right; }
+    .diag-copy:hover { background: #d1d5db; }
     .checkbox-group { display: flex; align-items: center; gap: 8px; }
     .checkbox-group input[type="checkbox"] { width: auto; }
     .section-title { font-size: 14px; font-weight: 600; color: #4f46e5; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 2px solid #e5e7eb; }
@@ -790,20 +1565,39 @@ function generateConfigHtml(): string {
         <h2>🏥 Centro Medico</h2>
       </div>
       <div class="card-body">
-        <div class="form-row">
+        <div class="alert alert-info" style="margin-bottom:16px;">
+          📋 El <strong>ID del Centro (UUID)</strong> se obtiene al crear el centro en el panel de administración de <strong>AndexReports</strong>. Ingrese el UUID y presione "Verificar" para cargar los datos automáticamente.
+        </div>
+        <div class="form-group">
+          <label>ID del Centro (UUID)</label>
+          <div style="display:flex;gap:8px;">
+            <input type="text" id="centroId" value="${currentConfig.centroId}" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" style="flex:1;font-family:monospace;font-size:13px;letter-spacing:0.5px;">
+            <button class="btn btn-primary" onclick="lookupCentro()" style="white-space:nowrap;">🔍 Verificar</button>
+          </div>
+          <small>UUID asignado al crear el centro en AndexReports (ej: a0000001-de00-4000-a000-000000000001)</small>
+        </div>
+        <div id="centroLookupResult"></div>
+        <div class="form-row" style="margin-top:12px;">
           <div class="form-group">
             <label>Nombre del Centro</label>
             <input type="text" id="centroNombre" value="${currentConfig.centroNombre}">
-          </div>
-          <div class="form-group">
-            <label>ID del Centro</label>
-            <input type="text" id="centroId" value="${currentConfig.centroId}">
-            <small>Identificador unico (ej: HOSPTALC)</small>
+            <small>Se autocompleta al verificar el UUID. También puede ingresarlo manualmente.</small>
           </div>
           <div class="form-group">
             <label>AE Title del Gateway</label>
             <input type="text" id="gatewayAeTitle" value="${currentConfig.gatewayAeTitle}" placeholder="ANDEX_1" maxlength="16" style="text-transform:uppercase;">
             <small>Nombre DICOM del Gateway en la red (aplica a DICOMweb y DICOM Nativo)</small>
+          </div>
+        </div>
+        <div id="centroDetails" style="display:none;margin-top:12px;padding:12px 16px;background:#f0fdf4;border-radius:8px;border:1px solid #bbf7d0;">
+          <div style="font-size:13px;font-weight:600;color:#166534;margin-bottom:8px;">✅ Centro Verificado</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:12px;color:#374151;">
+            <div><strong>Dirección:</strong> <span id="centroDir">-</span></div>
+            <div><strong>Teléfono:</strong> <span id="centroTel">-</span></div>
+            <div><strong>Email:</strong> <span id="centroEmail">-</span></div>
+            <div><strong>Plan:</strong> <span id="centroPlan">-</span></div>
+            <div><strong>Estado:</strong> <span id="centroEstado">-</span></div>
+            <div><strong>Unidad:</strong> <span id="centroUnidad">-</span></div>
           </div>
         </div>
       </div>
@@ -1011,6 +1805,135 @@ function generateConfigHtml(): string {
       setTimeout(function() { status.style.display = 'none'; }, 5000);
     }
 
+    var _diagIdCounter = 0;
+    function renderDiagnostic(diag, extraHtml) {
+      if (!diag) return '<div class="test-result" style="background:#fee2e2;">\\u274C Error desconocido — sin datos de diagnóstico</div>';
+      var id = 'diag_' + (++_diagIdCounter);
+      var sev = diag.severity || 'error';
+      var icon = sev === 'critical' ? '\\u{1F6A8}' : sev === 'error' ? '\\u274C' : sev === 'warning' ? '\\u26A0\\uFE0F' : '\\u2705';
+      var html = '<div class="diag-box">';
+      html += '<div class="diag-header ' + sev + '">';
+      html += '<span class="diag-code">' + (diag.code || 'GW-ERR') + '</span>';
+      html += '<span class="diag-title">' + icon + ' ' + (diag.title || 'Error') + '</span>';
+      html += '</div>';
+      html += '<div class="diag-body">';
+      html += '<div class="diag-detail">' + (diag.detail || '') + '</div>';
+      if (extraHtml) html += extraHtml;
+      if (diag.causes && diag.causes.length > 0) {
+        html += '<div class="diag-section causes"><div class="diag-section-title">\\uD83D\\uDD0D Posibles Causas</div><ul>';
+        for (var i = 0; i < diag.causes.length; i++) html += '<li>' + diag.causes[i] + '</li>';
+        html += '</ul></div>';
+      }
+      if (diag.fixes && diag.fixes.length > 0) {
+        html += '<div class="diag-section fixes"><div class="diag-section-title">\\uD83D\\uDEE0\\uFE0F Soluciones Recomendadas</div><ol>';
+        for (var i = 0; i < diag.fixes.length; i++) html += '<li>' + diag.fixes[i] + '</li>';
+        html += '</ol></div>';
+      }
+      if (diag.technical) {
+        var techId = id + '_tech';
+        html += '<div class="diag-tech-toggle" onclick="toggleTechDetails(\\'' + techId + '\\')">';
+        html += '\\u25B6 Detalles T\\u00E9cnicos (click para expandir)';
+        html += '</div>';
+        html += '<div id="' + techId + '" class="diag-tech-content">';
+        html += '<div class="diag-tech">';
+        var keys = Object.keys(diag.technical);
+        for (var i = 0; i < keys.length; i++) {
+          html += keys[i] + ': ' + diag.technical[keys[i]] + '\\n';
+        }
+        html += '</div>';
+        html += '<button class="diag-copy" onclick="copyDiagnostic(\\'' + id + '\\')">\\uD83D\\uDCCB Copiar Diagn\\u00F3stico</button>';
+        html += '</div>';
+      }
+      html += '</div></div>';
+      html += '<input type="hidden" id="' + id + '_data" value="' + btoa(unescape(encodeURIComponent(JSON.stringify(diag)))) + '">';
+      return html;
+    }
+
+    function toggleTechDetails(id) {
+      var el = document.getElementById(id);
+      if (el) {
+        el.classList.toggle('open');
+        var toggle = el.previousElementSibling;
+        if (toggle) toggle.innerHTML = el.classList.contains('open') ? '\\u25BC Detalles T\\u00E9cnicos (click para colapsar)' : '\\u25B6 Detalles T\\u00E9cnicos (click para expandir)';
+      }
+    }
+
+    function copyDiagnostic(id) {
+      var dataEl = document.getElementById(id + '_data');
+      if (!dataEl) return;
+      try {
+        var diag = JSON.parse(decodeURIComponent(escape(atob(dataEl.value))));
+        var text = '=== ANDEX Gateway - Diagn\\u00F3stico ===\\n';
+        text += 'C\\u00F3digo: ' + diag.code + '\\n';
+        text += 'Severidad: ' + diag.severity + '\\n';
+        text += 'T\\u00EDtulo: ' + diag.title + '\\n';
+        text += 'Detalle: ' + diag.detail + '\\n';
+        if (diag.causes) text += 'Causas: ' + diag.causes.join('; ') + '\\n';
+        if (diag.fixes) text += 'Soluciones: ' + diag.fixes.join('; ') + '\\n';
+        if (diag.technical) {
+          text += '--- T\\u00E9cnico ---\\n';
+          Object.keys(diag.technical).forEach(function(k) { text += k + ': ' + diag.technical[k] + '\\n'; });
+        }
+        navigator.clipboard.writeText(text).then(function() {
+          showStatus('Diagn\\u00F3stico copiado al portapapeles', 'success');
+        });
+      } catch(e) { showStatus('Error al copiar: ' + e.message, 'error'); }
+    }
+
+    async function lookupCentro() {
+      var centroId = document.getElementById('centroId').value.trim();
+      var resultDiv = document.getElementById('centroLookupResult');
+      var detailsDiv = document.getElementById('centroDetails');
+      if (!centroId) {
+        resultDiv.innerHTML = '<div class="alert alert-error" style="margin-top:8px;">Ingrese un ID de Centro (UUID) para verificar.</div>';
+        detailsDiv.style.display = 'none';
+        return;
+      }
+      var uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      if (!uuidRegex.test(centroId)) {
+        resultDiv.innerHTML = '<div class="alert alert-error" style="margin-top:8px;">\\u274C El ID debe ser un UUID v\\u00E1lido: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx</div>';
+        detailsDiv.style.display = 'none';
+        return;
+      }
+      resultDiv.innerHTML = '<div class="alert alert-info" style="margin-top:8px;">\\u23F3 Buscando centro en Supabase...</div>';
+      try {
+        var resp = await fetch('/api/config/lookup-centro', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ centroId: centroId }),
+          credentials: 'include'
+        });
+        var result = await resp.json();
+        if (result.success && result.centro) {
+          var c = result.centro;
+          document.getElementById('centroNombre').value = c.nombre;
+          document.getElementById('centroNombre').classList.remove('needs-config');
+          document.getElementById('centroNombre').classList.add('config-ok');
+          document.getElementById('centroId').classList.remove('needs-config');
+          document.getElementById('centroId').classList.add('config-ok');
+          resultDiv.innerHTML = '<div class="alert alert-success" style="margin-top:8px;">\\u2705 Centro encontrado: <strong>' + c.nombre + '</strong>' + (c.activo ? '' : ' \\u26A0\\uFE0F (INACTIVO)') + '</div>';
+          detailsDiv.style.display = 'block';
+          document.getElementById('centroDir').textContent = c.direccion || '-';
+          document.getElementById('centroTel').textContent = c.telefono || '-';
+          document.getElementById('centroEmail').textContent = c.email || '-';
+          document.getElementById('centroPlan').textContent = c.plan || '-';
+          document.getElementById('centroEstado').textContent = c.subscriptionStatus || '-';
+          document.getElementById('centroUnidad').textContent = c.subtituloUnidad || '-';
+        } else {
+          detailsDiv.style.display = 'none';
+          var hint = result.hint ? '<br><small style="color:#6b7280;">' + result.hint + '</small>' : '';
+          if (result.supabaseConfigured === false) {
+            resultDiv.innerHTML = '<div class="alert alert-info" style="margin-top:8px;">\\u26A0\\uFE0F ' + result.error + hint + '<br><small>Puede ingresar el nombre del centro manualmente.</small></div>';
+          } else {
+            resultDiv.innerHTML = '<div class="alert alert-error" style="margin-top:8px;">\\u274C ' + result.error + hint + '</div>';
+          }
+        }
+      } catch(e) {
+        detailsDiv.style.display = 'none';
+        resultDiv.innerHTML = '<div class="alert alert-error" style="margin-top:8px;">\\u274C Error de red: ' + e.message + '</div>';
+      }
+    }
+
     function togglePacsFields() {
       var pacsType = document.getElementById('pacsType').value;
       var isNative = pacsType === 'dicom-native';
@@ -1094,123 +2017,101 @@ function generateConfigHtml(): string {
 
     async function testPacs() {
       var resultDiv = document.getElementById('testPacsResult');
-      resultDiv.innerHTML = '<div class="test-result">\u23F3 Probando conexion PACS...</div>';
+      resultDiv.innerHTML = '<div class="test-result">\\u23F3 Probando conexion PACS...</div>';
       try {
         await saveConfig();
         var resp = await fetch('/api/config/test-pacs', { method: 'POST', credentials: 'include' });
         var result = await resp.json();
-        if (result.success) {
-          resultDiv.innerHTML = '<div class="test-result" style="background:#dcfce7;">'
-            + result.message
-            + '\\nEndpoint: ' + result.endpoint
-            + '\\nURL: ' + result.pacsUrl
-            + '\\nTipo: ' + (result.pacsTypeLabel || result.pacsType)
-            + '</div>';
+        if (result.diagnostic) {
+          var extra = '';
+          if (result.success && result.serverInfo) extra = '<div style="margin:6px 0;color:#166534;font-weight:600;">\\uD83C\\uDFE5 ' + result.serverInfo + '</div>';
+          if (result.success && result.endpoint) extra += '<div style="margin:4px 0;color:#6b7280;font-size:12px;">Endpoint: ' + result.endpoint + ' | Latencia: ' + (result.latency || '-') + 'ms</div>';
+          resultDiv.innerHTML = renderDiagnostic(result.diagnostic, extra);
+        } else if (result.success) {
+          resultDiv.innerHTML = '<div class="test-result" style="background:#dcfce7;">' + result.message + '</div>';
         } else {
-          var hint = result.hint ? '\\n\\n\uD83D\uDCA1 ' + result.hint : '';
-          resultDiv.innerHTML = '<div class="test-result" style="background:#fee2e2;">\u274C ' + result.error
-            + (result.endpoint ? '\\nEndpoint: ' + result.endpoint : '')
-            + (result.pacsUrl ? '\\nURL: ' + result.pacsUrl : '')
-            + '\\nTipo configurado: ' + (result.pacsTypeLabel || result.pacsType || 'desconocido')
-            + hint
-            + '</div>';
+          resultDiv.innerHTML = '<div class="test-result" style="background:#fee2e2;">\\u274C ' + (result.error || 'Error desconocido') + '</div>';
         }
       } catch (e) {
-        resultDiv.innerHTML = '<div class="test-result" style="background:#fee2e2;">\u274C Error de red: ' + e.message + '\\n\\n\uD83D\uDCA1 No se pudo conectar al Gateway. Verifique que est\u00e9 corriendo.</div>';
+        var errDiag = { code: 'GW-LOCAL-001', severity: 'critical', title: 'Error de Red Local', detail: 'No se pudo conectar al Gateway desde el navegador: ' + e.message, causes: ['El Gateway no est\\u00E1 corriendo', 'El navegador no puede alcanzar el servidor local', 'Problema de red entre navegador y Gateway'], fixes: ['Verifique que el Gateway est\\u00E9 ejecut\\u00E1ndose (terminal)', 'Recargue la p\\u00E1gina e intente nuevamente'], technical: { browserError: e.message, timestamp: new Date().toISOString() } };
+        resultDiv.innerHTML = renderDiagnostic(errDiag);
       }
     }
 
     async function testStow() {
       var resultDiv = document.getElementById('testStowResult');
-      resultDiv.innerHTML = '<div class="test-result">\u23F3 Probando endpoint STOW...</div>';
+      resultDiv.innerHTML = '<div class="test-result">\\u23F3 Probando endpoint STOW...</div>';
       try {
         await saveConfig();
         var resp = await fetch('/api/config/test-stow', { method: 'POST', credentials: 'include' });
         var result = await resp.json();
-        if (result.success) {
-          resultDiv.innerHTML = '<div class="test-result" style="background:#dcfce7;">'
-            + result.message
-            + '\\nEndpoint: ' + result.endpoint
-            + '\\nURL: ' + result.stowUrl
-            + '\\nTipo: ' + (result.pacsTypeLabel || result.pacsType)
-            + '</div>';
+        if (result.diagnostic) {
+          var extra = '';
+          if (result.success && result.endpoint) extra = '<div style="margin:4px 0;color:#6b7280;font-size:12px;">Endpoint: ' + result.endpoint + ' | STOW URL: ' + (result.stowUrl || '-') + ' | Latencia: ' + (result.latency || '-') + 'ms</div>';
+          resultDiv.innerHTML = renderDiagnostic(result.diagnostic, extra);
+        } else if (result.success) {
+          resultDiv.innerHTML = '<div class="test-result" style="background:#dcfce7;">' + result.message + '</div>';
         } else {
-          var hint = result.hint ? '\\n\\n\uD83D\uDCA1 ' + result.hint : '';
-          resultDiv.innerHTML = '<div class="test-result" style="background:#fee2e2;">\u274C ' + result.error
-            + (result.endpoint ? '\\nEndpoint: ' + result.endpoint : '')
-            + (result.stowUrl ? '\\nURL: ' + result.stowUrl : '')
-            + '\\nTipo configurado: ' + (result.pacsTypeLabel || result.pacsType || 'desconocido')
-            + hint
-            + '</div>';
+          resultDiv.innerHTML = '<div class="test-result" style="background:#fee2e2;">\\u274C ' + (result.error || 'Error desconocido') + '</div>';
         }
       } catch (e) {
-        resultDiv.innerHTML = '<div class="test-result" style="background:#fee2e2;">\u274C Error de red: ' + e.message + '</div>';
+        var errDiag = { code: 'GW-LOCAL-001', severity: 'critical', title: 'Error de Red Local', detail: 'No se pudo conectar al Gateway: ' + e.message, causes: ['El Gateway no est\\u00E1 corriendo'], fixes: ['Verifique que el Gateway est\\u00E9 ejecut\\u00E1ndose'], technical: { browserError: e.message, timestamp: new Date().toISOString() } };
+        resultDiv.innerHTML = renderDiagnostic(errDiag);
       }
     }
 
     async function testWorklist() {
       var resultDiv = document.getElementById('testWorklistResult');
-      resultDiv.innerHTML = '<div class="test-result">\u23F3 Probando Worklist...</div>';
+      resultDiv.innerHTML = '<div class="test-result">\\u23F3 Probando Worklist...</div>';
       try {
         await saveConfig();
         var resp = await fetch('/api/config/test-worklist', { method: 'POST', credentials: 'include' });
         var result = await resp.json();
-        if (result.success) {
-          var preview = '';
-          if (result.preview && result.preview.length > 0) {
-            preview = '\\n\\nPrimeros items:\\n' + result.preview.map(function(item) {
-              return '\u2022 ' + (item.patientName || 'Sin nombre') + ' - ' + (item.accessionNumber || 'Sin accession') + ' - ' + (item.description || '');
-            }).join('\\n');
+        if (result.diagnostic) {
+          var extra = '';
+          if (result.success && result.preview && result.preview.length > 0) {
+            extra = '<div class="diag-section" style="margin-top:8px;"><div class="diag-section-title">\\uD83D\\uDCCB Primeros Items del Worklist</div><ul style="list-style:none;padding:0;">';
+            for (var i = 0; i < result.preview.length; i++) {
+              var item = result.preview[i];
+              extra += '<li style="margin-bottom:4px;padding:4px 8px;background:#f0fdf4;border-radius:4px;font-size:12px;">\\u2022 ' + (item.patientName || 'Sin nombre') + ' — ' + (item.accessionNumber || 'Sin accession') + ' — ' + (item.modality || '') + ' — ' + (item.description || '') + '</li>';
+            }
+            extra += '</ul></div>';
           }
-          resultDiv.innerHTML = '<div class="test-result" style="background:#dcfce7;">'
-            + result.message
-            + '\\nFuente: ' + result.source
-            + '\\nTipo PACS: ' + (result.pacsTypeLabel || result.pacsType)
-            + '\\nLatencia: ' + result.latency
-            + preview
-            + '</div>';
+          if (result.success) extra += '<div style="margin:4px 0;color:#6b7280;font-size:12px;">Fuente: ' + (result.source || '-') + ' | Latencia: ' + (result.latency || '-') + '</div>';
+          resultDiv.innerHTML = renderDiagnostic(result.diagnostic, extra);
+        } else if (result.success) {
+          resultDiv.innerHTML = '<div class="test-result" style="background:#dcfce7;">' + result.message + '</div>';
         } else {
-          var hint = result.hint ? '\\n\\n\uD83D\uDCA1 ' + result.hint : '';
-          resultDiv.innerHTML = '<div class="test-result" style="background:#fee2e2;">\u274C ' + result.error
-            + '\\nFuente: ' + (result.source || 'desconocida')
-            + '\\nTipo configurado: ' + (result.pacsTypeLabel || result.pacsType || 'desconocido')
-            + hint
-            + '</div>';
+          resultDiv.innerHTML = '<div class="test-result" style="background:#fee2e2;">\\u274C ' + (result.error || 'Error desconocido') + '</div>';
         }
       } catch (e) {
-        resultDiv.innerHTML = '<div class="test-result" style="background:#fee2e2;">\u274C Error de red: ' + e.message + '</div>';
+        var errDiag = { code: 'GW-LOCAL-001', severity: 'critical', title: 'Error de Red Local', detail: 'No se pudo conectar al Gateway: ' + e.message, causes: ['El Gateway no est\\u00E1 corriendo'], fixes: ['Verifique que el Gateway est\\u00E9 ejecut\\u00E1ndose'], technical: { browserError: e.message, timestamp: new Date().toISOString() } };
+        resultDiv.innerHTML = renderDiagnostic(errDiag);
       }
     }
 
     async function testCEcho() {
       var resultDiv = document.getElementById('testCEchoResult');
-      resultDiv.innerHTML = '<div class="test-result">\u23F3 Probando conexion TCP al PACS...</div>';
+      resultDiv.innerHTML = '<div class="test-result">\\u23F3 Probando conexion TCP al PACS...</div>';
       try {
         await saveConfig();
         var resp = await fetch('/api/config/test-cecho', { method: 'POST', credentials: 'include' });
         var result = await resp.json();
-        if (result.success) {
-          var details = result.details || {};
-          resultDiv.innerHTML = '<div class="test-result" style="background:#dcfce7;">'
-            + result.message
-            + '\\n\\nDetalles:'
-            + '\\n  Host: ' + (details.host || '-')
-            + '\\n  Port: ' + (details.port || '-')
-            + '\\n  Calling AET (Gateway): ' + (details.callingAet || '-')
-            + '\\n  Called AET (PACS): ' + (details.calledAet || '-')
-            + (details.note ? '\\n\\n\uD83D\uDCA1 ' + details.note : '')
-            + '</div>';
+        if (result.diagnostic) {
+          var extra = '';
+          if (result.success && result.details) {
+            var d = result.details;
+            extra = '<div style="margin:6px 0;font-size:12px;color:#374151;"><strong>Conexi\\u00F3n:</strong> ' + (d.host || '-') + ':' + (d.port || '-') + ' | <strong>Gateway AET:</strong> ' + (d.callingAet || '-') + ' | <strong>PACS AET:</strong> ' + (d.calledAet || '-') + ' | <strong>Latencia:</strong> ' + (result.latency || '-') + 'ms</div>';
+          }
+          resultDiv.innerHTML = renderDiagnostic(result.diagnostic, extra);
+        } else if (result.success) {
+          resultDiv.innerHTML = '<div class="test-result" style="background:#dcfce7;">' + result.message + '</div>';
         } else {
-          var hint = result.hint ? '\\n\\n\uD83D\uDCA1 ' + result.hint : '';
-          var details = result.details || {};
-          resultDiv.innerHTML = '<div class="test-result" style="background:#fee2e2;">\u274C ' + result.error
-            + (details.host ? '\\n  Host: ' + details.host + ':' + details.port : '')
-            + (details.calledAet ? '\\n  PACS AE Title: ' + details.calledAet : '')
-            + hint
-            + '</div>';
+          resultDiv.innerHTML = '<div class="test-result" style="background:#fee2e2;">\\u274C ' + (result.error || 'Error desconocido') + '</div>';
         }
       } catch (e) {
-        resultDiv.innerHTML = '<div class="test-result" style="background:#fee2e2;">\u274C Error de red: ' + e.message + '</div>';
+        var errDiag = { code: 'GW-LOCAL-001', severity: 'critical', title: 'Error de Red Local', detail: 'No se pudo conectar al Gateway: ' + e.message, causes: ['El Gateway no est\\u00E1 corriendo'], fixes: ['Verifique que el Gateway est\\u00E9 ejecut\\u00E1ndose'], technical: { browserError: e.message, timestamp: new Date().toISOString() } };
+        resultDiv.innerHTML = renderDiagnostic(errDiag);
       }
     }
 
@@ -1242,7 +2143,7 @@ function generateConfigHtml(): string {
     // ============================================
     var DEFAULT_VALUES = {
       'centroNombre': ['Mi Centro Medico', ''],
-      'centroId': ['CENTRO01', ''],
+      'centroId': ['CENTRO01', '', 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx'],
       'apiKey': ['dev-api-key-cambiar', ''],
       'dashboardUser': ['admin'],
       'pacsUrl': ['http://localhost:8042', ''],
