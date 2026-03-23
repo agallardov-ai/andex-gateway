@@ -1,7 +1,7 @@
 import dotenv from 'dotenv';
 dotenv.config();
 
-export type PacsType = 'orthanc' | 'dicomweb';
+export type PacsType = 'orthanc' | 'dicomweb' | 'dicom-native';
 export type AuthType = 'none' | 'basic' | 'bearer';
 
 export const config = {
@@ -30,6 +30,13 @@ export const config = {
   pacsUsername: process.env.PACS_USERNAME || '',
   pacsPassword: process.env.PACS_PASSWORD || '',
   pacsToken: process.env.PACS_TOKEN || '',
+
+  // ===== DICOM NATIVO (TCP) =====
+  gatewayAeTitle: process.env.GATEWAY_AE_TITLE || 'ANDEX_GW',
+  pacsDicomHost: process.env.PACS_DICOM_HOST || '',
+  pacsDicomPort: parseInt(process.env.PACS_DICOM_PORT || '104', 10),
+  pacsAeTitle: process.env.PACS_AE_TITLE || '',
+  gatewayDicomPort: parseInt(process.env.GATEWAY_DICOM_PORT || '11113', 10),
 
   // ===== DICOMweb ENDPOINTS =====
   pacsStowEndpoint: process.env.PACS_STOW_ENDPOINT || '/dicomweb/studies',

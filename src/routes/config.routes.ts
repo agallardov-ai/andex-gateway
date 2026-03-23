@@ -41,6 +41,12 @@ export async function configRoutes(fastify: FastifyInstance): Promise<void> {
           dicomwebStowPath: runtimeConfig.DICOMWEB_STOW_PATH || config.dicomwebStowPath,
           dicomwebQidoPath: runtimeConfig.DICOMWEB_QIDO_PATH || config.dicomwebQidoPath,
           dicomwebWadoPath: runtimeConfig.DICOMWEB_WADO_PATH || config.dicomwebWadoPath,
+          // DICOM Native (TCP)
+          gatewayAeTitle: runtimeConfig.GATEWAY_AE_TITLE || config.gatewayAeTitle,
+          pacsDicomHost: runtimeConfig.PACS_DICOM_HOST || config.pacsDicomHost,
+          pacsDicomPort: parseInt(runtimeConfig.PACS_DICOM_PORT || String(config.pacsDicomPort)),
+          pacsAeTitle: runtimeConfig.PACS_AE_TITLE || config.pacsAeTitle,
+          gatewayDicomPort: parseInt(runtimeConfig.GATEWAY_DICOM_PORT || String(config.gatewayDicomPort)),
           // Worklist paths
           worklistUpsPath: runtimeConfig.WORKLIST_UPS_PATH || config.worklistUpsPath,
           worklistQidoMwlPath: runtimeConfig.WORKLIST_QIDO_MWL_PATH || config.worklistQidoMwlPath,
@@ -66,6 +72,13 @@ export async function configRoutes(fastify: FastifyInstance): Promise<void> {
       if (body.pacsAuthType) runtimeConfig.PACS_AUTH_TYPE = body.pacsAuthType;
       if (body.pacsUsername) runtimeConfig.PACS_USERNAME = body.pacsUsername;
       if (body.pacsPassword) runtimeConfig.PACS_PASSWORD = body.pacsPassword;
+      
+      // DICOM Native (TCP)
+      if (body.gatewayAeTitle) runtimeConfig.GATEWAY_AE_TITLE = body.gatewayAeTitle;
+      if (body.pacsDicomHost) runtimeConfig.PACS_DICOM_HOST = body.pacsDicomHost;
+      if (body.pacsDicomPort) runtimeConfig.PACS_DICOM_PORT = String(body.pacsDicomPort);
+      if (body.pacsAeTitle) runtimeConfig.PACS_AE_TITLE = body.pacsAeTitle;
+      if (body.gatewayDicomPort) runtimeConfig.GATEWAY_DICOM_PORT = String(body.gatewayDicomPort);
       
       // DICOMweb paths
       if (body.dicomwebStowPath) runtimeConfig.DICOMWEB_STOW_PATH = body.dicomwebStowPath;
@@ -298,6 +311,74 @@ export async function configRoutes(fastify: FastifyInstance): Promise<void> {
     }
   });
 
+
+  // POST /api/config/test-cecho - Test DICOM C-ECHO (ping nativo)
+  fastify.post('/api/config/test-cecho', {
+    preHandler: dashboardAuth,
+    handler: async (request: FastifyRequest, reply: FastifyReply) => {
+      const host = runtimeConfig.PACS_DICOM_HOST || config.pacsDicomHost;
+      const port = parseInt(runtimeConfig.PACS_DICOM_PORT || String(config.pacsDicomPort));
+      const calledAet = runtimeConfig.PACS_AE_TITLE || config.pacsAeTitle;
+      const callingAet = runtimeConfig.GATEWAY_AE_TITLE || config.gatewayAeTitle;
+      
+      if (!host) {
+        return reply.send({ success: false, error: 'PACS Host/IP no configurado' });
+      }
+      if (!calledAet) {
+        return reply.send({ success: false, error: 'PACS AE Title no configurado' });
+      }
+      
+      try {
+        const startTime = Date.now();
+        // TCP connection test (since we don't have a DICOM library, test TCP connectivity)
+        const net = await import('net');
+        const result = await new Promise<{success: boolean; error?: string}>((resolve) => {
+          const socket = new net.default.Socket();
+          const timeout = setTimeout(() => {
+            socket.destroy();
+            resolve({ success: false, error: `Timeout conectando a ${host}:${port}` });
+          }, 5000);
+          
+          socket.connect(port, host, () => {
+            clearTimeout(timeout);
+            socket.destroy();
+            resolve({ success: true });
+          });
+          
+          socket.on('error', (err: Error) => {
+            clearTimeout(timeout);
+            resolve({ success: false, error: err.message });
+          });
+        });
+        
+        const latency = Date.now() - startTime;
+        
+        if (result.success) {
+          return reply.send({
+            success: true,
+            message: `TCP OK - Puerto ${port} accesible (${latency}ms)`,
+            details: {
+              host,
+              port,
+              callingAet,
+              calledAet,
+              note: 'Conexión TCP exitosa. Para C-ECHO completo se requiere librería DICOM (dcmtk/dimse).'
+            }
+          });
+        } else {
+          return reply.send({
+            success: false,
+            error: result.error,
+            details: { host, port, callingAet, calledAet }
+          });
+        }
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : 'Error desconocido';
+        return reply.send({ success: false, error: msg });
+      }
+    }
+  });
+
   console.log('🔧 Rutas de configuración registradas: /config, /api/config/*');
 }
 
@@ -333,6 +414,12 @@ function generateConfigHtml(): string {
     worklistUpsPath: runtimeConfig.WORKLIST_UPS_PATH || config.worklistUpsPath,
     worklistQidoMwlPath: runtimeConfig.WORKLIST_QIDO_MWL_PATH || config.worklistQidoMwlPath,
     worklistPreferUps: runtimeConfig.WORKLIST_PREFER_UPS !== 'false',
+    // DICOM Native
+    gatewayAeTitle: runtimeConfig.GATEWAY_AE_TITLE || config.gatewayAeTitle,
+    pacsDicomHost: runtimeConfig.PACS_DICOM_HOST || config.pacsDicomHost,
+    pacsDicomPort: parseInt(runtimeConfig.PACS_DICOM_PORT || String(config.pacsDicomPort)),
+    pacsAeTitle: runtimeConfig.PACS_AE_TITLE || config.pacsAeTitle,
+    gatewayDicomPort: parseInt(runtimeConfig.GATEWAY_DICOM_PORT || String(config.gatewayDicomPort)),
   };
 
   return `<!DOCTYPE html>
@@ -428,6 +515,7 @@ function generateConfigHtml(): string {
             <select id="pacsType" onchange="toggleDicomwebFields()">
               <option value="orthanc" ${currentConfig.pacsType === 'orthanc' ? 'selected' : ''}>Orthanc REST API</option>
               <option value="dicomweb" ${currentConfig.pacsType === 'dicomweb' ? 'selected' : ''}>DICOMweb (STOW/QIDO/WADO)</option>
+              <option value="dicom-native" ${currentConfig.pacsType === 'dicom-native' ? 'selected' : ''}>DICOM Nativo (TCP - C-STORE/MWL)</option>
             </select>
           </div>
           <div class="form-group">
@@ -497,6 +585,57 @@ function generateConfigHtml(): string {
       </div>
     </div>
 
+
+    <!-- DICOM Native -->
+    <div class="card" id="dicomNativeCard">
+      <div class="card-header">
+        <h2>📡 DICOM Nativo (TCP)</h2>
+      </div>
+      <div class="card-body">
+        <p class="section-title">🏥 Identidad del Gateway</p>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Gateway AE Title (Calling AET)</label>
+            <input type="text" id="gatewayAeTitle" value="${currentConfig.gatewayAeTitle}" placeholder="ANDEX_GW" maxlength="16">
+            <small>Nombre con que este Gateway se identifica ante el PACS (máx 16 caracteres, sin espacios)</small>
+          </div>
+          <div class="form-group">
+            <label>Gateway DICOM Port</label>
+            <input type="number" id="gatewayDicomPort" value="${currentConfig.gatewayDicomPort}" placeholder="11113">
+            <small>Puerto local para recibir imágenes via C-MOVE (opcional)</small>
+          </div>
+        </div>
+
+        <p class="section-title" style="margin-top: 20px;">🖥️ PACS Remoto (Synapse / DCM4CHEE / etc)</p>
+        <div class="form-row-3">
+          <div class="form-group">
+            <label>PACS Host / IP</label>
+            <input type="text" id="pacsDicomHost" value="${currentConfig.pacsDicomHost}" placeholder="192.168.1.100">
+            <small>IP o hostname del servidor PACS</small>
+          </div>
+          <div class="form-group">
+            <label>PACS DICOM Port</label>
+            <input type="number" id="pacsDicomPort" value="${currentConfig.pacsDicomPort}" placeholder="104">
+            <small>Puerto TCP DICOM (104 o 11112)</small>
+          </div>
+          <div class="form-group">
+            <label>PACS AE Title (Called AET)</label>
+            <input type="text" id="pacsAeTitle" value="${currentConfig.pacsAeTitle}" placeholder="SYNAPSE" maxlength="16">
+            <small>AE Title del PACS destino</small>
+          </div>
+        </div>
+
+        <div class="alert alert-info" style="margin-top: 12px;">
+          <strong>⚠️ Importante:</strong> El PACS remoto debe tener configurado el AE Title del Gateway (<strong>${currentConfig.gatewayAeTitle || 'ANDEX_GW'}</strong>) como nodo permitido para enviar/recibir estudios. Solicita al administrador del PACS que agregue esta entrada.
+        </div>
+
+        <div class="btn-group">
+          <button class="btn btn-outline" onclick="testCEcho()">🔌 Test Conexión TCP</button>
+        </div>
+        <div id="testCEchoResult"></div>
+      </div>
+    </div>
+
     <!-- Worklist -->
     <div class="card">
       <div class="card-header">
@@ -550,7 +689,11 @@ function generateConfigHtml(): string {
 
     function toggleDicomwebFields() {
       var pacsType = document.getElementById('pacsType').value;
-      document.getElementById('dicomwebCard').style.display = pacsType === 'dicomweb' ? 'block' : 'none';
+      document.getElementById('dicomwebCard').style.display = (pacsType === 'dicomweb' || pacsType === 'orthanc') ? 'block' : 'none';
+      document.getElementById('dicomNativeCard').style.display = pacsType === 'dicom-native' ? 'block' : 'none';
+      // Show/hide URL field based on type
+      var urlGroup = document.getElementById('pacsUrl').closest('.form-group');
+      if (urlGroup) urlGroup.style.display = pacsType === 'dicom-native' ? 'none' : '';
     }
     toggleDicomwebFields();
 
@@ -568,6 +711,12 @@ function generateConfigHtml(): string {
         worklistUpsPath: document.getElementById('worklistUpsPath').value,
         worklistQidoMwlPath: document.getElementById('worklistQidoMwlPath').value,
         worklistPreferUps: document.getElementById('worklistPreferUps').checked,
+        // DICOM Native
+        gatewayAeTitle: document.getElementById('gatewayAeTitle').value,
+        pacsDicomHost: document.getElementById('pacsDicomHost').value,
+        pacsDicomPort: parseInt(document.getElementById('pacsDicomPort').value) || 104,
+        pacsAeTitle: document.getElementById('pacsAeTitle').value,
+        gatewayDicomPort: parseInt(document.getElementById('gatewayDicomPort').value) || 11113,
       };
       
       var password = document.getElementById('pacsPassword').value;
