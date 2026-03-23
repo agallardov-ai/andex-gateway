@@ -49,9 +49,6 @@ export async function configRoutes(fastify: FastifyInstance): Promise<void> {
           worklistUpsPath: s.worklistEndpoint || config.worklistUpsPath,
           worklistQidoMwlPath: s.worklistMwlEndpoint || config.worklistQidoMwlPath,
           worklistPreferUps: s.worklistPreferUps !== undefined ? s.worklistPreferUps : config.worklistPreferUps,
-          supabaseUrl: s.supabaseUrl || process.env.SUPABASE_URL || '',
-          supabaseAnonKey: s.supabaseAnonKey || process.env.SUPABASE_ANON_KEY || '',
-          supabaseCentroToken: s.supabaseCentroToken || process.env.SUPABASE_CENTRO_TOKEN || '',
         }
       });
     }
@@ -86,9 +83,6 @@ export async function configRoutes(fastify: FastifyInstance): Promise<void> {
       if (body.worklistUpsPath) updates.worklistEndpoint = body.worklistUpsPath;
       if (body.worklistQidoMwlPath) updates.worklistMwlEndpoint = body.worklistQidoMwlPath;
       if (body.worklistPreferUps !== undefined) updates.worklistPreferUps = !!body.worklistPreferUps;
-      if (body.supabaseUrl !== undefined) updates.supabaseUrl = body.supabaseUrl;
-      if (body.supabaseAnonKey !== undefined) updates.supabaseAnonKey = body.supabaseAnonKey;
-      if (body.supabaseCentroToken !== undefined) updates.supabaseCentroToken = body.supabaseCentroToken;
       
       const result = configStore.save(updates);
       
@@ -389,9 +383,6 @@ function generateConfigHtml(): string {
     pacsDicomPort: s.pacsDicomPort || config.pacsDicomPort,
     pacsAeTitle: s.pacsAeTitle || config.pacsAeTitle,
     gatewayDicomPort: s.gatewayDicomPort || config.gatewayDicomPort,
-    supabaseUrl: s.supabaseUrl || process.env.SUPABASE_URL || '',
-    supabaseAnonKey: s.supabaseAnonKey || process.env.SUPABASE_ANON_KEY || '',
-    supabaseCentroToken: s.supabaseCentroToken || process.env.SUPABASE_CENTRO_TOKEN || '',
   };
 
   return `<!DOCTYPE html>
@@ -640,30 +631,6 @@ function generateConfigHtml(): string {
       </div>
     </div>
 
-    <!-- Supabase -->
-    <div class="card">
-      <div class="card-header">
-        <h2>\u2601\uFE0F Supabase (Backend PWA)</h2>
-      </div>
-      <div class="card-body">
-        <div class="form-group">
-          <label>Supabase URL</label>
-          <input type="text" id="supabaseUrl" value="\${currentConfig.supabaseUrl}" placeholder="https://xxxxx.supabase.co">
-        </div>
-        <div class="form-row">
-          <div class="form-group">
-            <label>Anon Key</label>
-            <input type="text" id="supabaseAnonKey" value="\${currentConfig.supabaseAnonKey}" placeholder="eyJ...">
-          </div>
-          <div class="form-group">
-            <label>Centro Token (JWT)</label>
-            <input type="text" id="supabaseCentroToken" value="\${currentConfig.supabaseCentroToken}" placeholder="eyJ...">
-            <small>Token scoped al centro para RLS</small>
-          </div>
-        </div>
-      </div>
-    </div>
-
     <!-- Worklist -->
     <div class="card">
       <div class="card-header">
@@ -751,9 +718,6 @@ function generateConfigHtml(): string {
         worklistUpsPath: document.getElementById('worklistUpsPath').value,
         worklistQidoMwlPath: document.getElementById('worklistQidoMwlPath').value,
         worklistPreferUps: document.getElementById('worklistPreferUps').checked,
-        supabaseUrl: document.getElementById('supabaseUrl').value,
-        supabaseAnonKey: document.getElementById('supabaseAnonKey').value,
-        supabaseCentroToken: document.getElementById('supabaseCentroToken').value,
       };
       
       var password = document.getElementById('pacsPassword').value;

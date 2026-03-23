@@ -44,11 +44,6 @@ export interface GatewayConfig {
   worklistPreferUps?: boolean;
   worklistDefaultModality?: string;
   worklistStationAET?: string;
-  // Supabase
-  supabaseUrl?: string;
-  supabaseAnonKey?: string;
-  supabaseCentroToken?: string;
-  supabaseServiceKey?: string;
   // Sync
   worklistSyncEnabled?: boolean;
   worklistSyncIntervalMs?: number;
