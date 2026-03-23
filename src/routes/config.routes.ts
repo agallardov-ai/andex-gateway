@@ -463,6 +463,11 @@ function generateConfigHtml(): string {
             <input type="text" id="centroId" value="\${currentConfig.centroId}">
             <small>Identificador unico (ej: HOSPTALC)</small>
           </div>
+          <div class="form-group">
+            <label>AE Title del Gateway</label>
+            <input type="text" id="gatewayAeTitle" value="\${currentConfig.gatewayAeTitle}" placeholder="ANDEX_1" maxlength="16" style="text-transform:uppercase;">
+            <small>Nombre DICOM del Gateway en la red (aplica a DICOMweb y DICOM Nativo)</small>
+          </div>
         </div>
       </div>
     </div>
@@ -587,19 +592,14 @@ function generateConfigHtml(): string {
         <h2>\U0001F4E1 DICOM Nativo (TCP)</h2>
       </div>
       <div class="card-body">
-        <p class="section-title">\U0001F3E5 Identidad del Gateway</p>
         <div class="form-row">
-          <div class="form-group">
-            <label>Gateway AE Title (Calling AET)</label>
-            <input type="text" id="gatewayAeTitle" value="\${currentConfig.gatewayAeTitle}" placeholder="ANDEX_GW" maxlength="16">
-            <small>Nombre con que este Gateway se identifica ante el PACS (max 16 caracteres)</small>
-          </div>
           <div class="form-group">
             <label>Gateway DICOM Port</label>
             <input type="number" id="gatewayDicomPort" value="\${currentConfig.gatewayDicomPort}" placeholder="11113">
-            <small>Puerto local para recibir imagenes via C-MOVE</small>
+            <small>Puerto donde el Gateway escucha conexiones DICOM (C-MOVE)</small>
           </div>
         </div>
+
 
         <p class="section-title" style="margin-top: 20px;">\U0001F5A5\uFE0F PACS Remoto (Synapse / DCM4CHEE / etc)</p>
         <div class="form-row-3">
@@ -621,7 +621,7 @@ function generateConfigHtml(): string {
         </div>
 
         <div class="alert alert-info" style="margin-top: 12px;">
-          <strong>\u26A0\uFE0F Importante:</strong> El PACS remoto debe tener configurado el AE Title del Gateway (<strong>\${currentConfig.gatewayAeTitle || 'ANDEX_GW'}</strong>) como nodo permitido.
+          <strong>\u26A0\uFE0F Importante:</strong> El PACS remoto debe tener configurado el AE Title del Gateway (<strong>\${currentConfig.gatewayAeTitle || 'ANDEX_1'}</strong>) como nodo permitido.
         </div>
 
         <div class="btn-group">

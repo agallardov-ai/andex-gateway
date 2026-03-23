@@ -38,7 +38,7 @@ export const config = {
   pacsToken: store.getOrEnv('pacsToken', 'PACS_TOKEN', ''),
 
   // ===== DICOM NATIVO (TCP) =====
-  gatewayAeTitle: store.getOrEnv('gatewayAeTitle', 'GATEWAY_AE_TITLE', 'ANDEX_GW'),
+  gatewayAeTitle: store.getOrEnv('gatewayAeTitle', 'GATEWAY_AE_TITLE', 'ANDEX_1'),
   pacsDicomHost: store.getOrEnv('pacsDicomHost', 'PACS_DICOM_HOST', ''),
   pacsDicomPort: store.getNumOrEnv('pacsDicomPort', 'PACS_DICOM_PORT', 104),
   pacsAeTitle: store.getOrEnv('pacsAeTitle', 'PACS_AE_TITLE', ''),
