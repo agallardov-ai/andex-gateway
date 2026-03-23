@@ -112,6 +112,64 @@ export async function configRoutes(fastify: FastifyInstance): Promise<void> {
     }
   });
 
+  // ========================================
+  // HELPERS: labels & diagnostics for tests
+  // ========================================
+  function getPacsTypeLabel(type: string): string {
+    switch (type) {
+      case 'orthanc': return 'Orthanc REST API';
+      case 'dicomweb': return 'DICOMweb (STOW/QIDO/WADO)';
+      case 'dicom-native': return 'DICOM Nativo (TCP)';
+      default: return type || 'No configurado';
+    }
+  }
+
+  function diagnoseError(err: unknown, context: { pacsType: string; url?: string; host?: string; port?: number }): { error: string; hint: string } {
+    const msg = err instanceof Error ? err.message : String(err);
+    const label = getPacsTypeLabel(context.pacsType);
+    let hint = '';
+
+    // Connection refused
+    if (/ECONNREFUSED/i.test(msg)) {
+      if (context.url) {
+        hint = `El servidor no responde en ${context.url}. Verifique que el PACS (${label}) esté encendido y que la URL y puerto sean correctos.`;
+      } else {
+        hint = `No se pudo conectar a ${context.host}:${context.port}. Verifique que el PACS esté encendido y el puerto abierto en el firewall.`;
+      }
+    }
+    // DNS resolution
+    else if (/ENOTFOUND|getaddrinfo/i.test(msg)) {
+      const target = context.url || context.host || '';
+      hint = `No se puede resolver el hostname. Verifique que la dirección "${target}" sea correcta y accesible desde este equipo.`;
+    }
+    // Timeout
+    else if (/timeout|ETIMEDOUT|ESOCKETTIMEDOUT/i.test(msg)) {
+      hint = `La conexión tardó demasiado (>10s). Posibles causas: firewall bloqueando, IP incorrecta, o el PACS está sobrecargado.`;
+    }
+    // SSL/TLS
+    else if (/SELF_SIGNED|CERT|SSL|TLS|UNABLE_TO_VERIFY/i.test(msg)) {
+      hint = `Error de certificado SSL/TLS. Si el PACS usa certificado auto-firmado, configure NODE_TLS_REJECT_UNAUTHORIZED=0 en el .env (solo desarrollo).`;
+    }
+    // Network unreachable
+    else if (/ENETUNREACH|EHOSTUNREACH|NETWORK/i.test(msg)) {
+      hint = `Red inalcanzable. Verifique que este equipo tiene acceso a la red donde está el PACS.`;
+    }
+    // Port in use / permission
+    else if (/EACCES|EADDRINUSE/i.test(msg)) {
+      hint = `Error de permisos o puerto en uso. Verifique que el puerto no esté ocupado por otro servicio.`;
+    }
+    // Abort
+    else if (/abort/i.test(msg)) {
+      hint = `La petición fue cancelada. Posible timeout de red.`;
+    }
+    // Generic
+    else {
+      hint = `Error inesperado. Verifique que la configuración de PACS tipo "${label}" sea correcta.`;
+    }
+
+    return { error: msg, hint };
+  }
+
   // POST /api/config/test-pacs - Probar conexion PACS
   fastify.post('/api/config/test-pacs', {
     preHandler: dashboardAuth,
@@ -119,6 +177,34 @@ export async function configRoutes(fastify: FastifyInstance): Promise<void> {
       const s = configStore.getAll();
       const pacsUrl = s.pacsBaseUrl || config.pacsUrl;
       const pacsType = s.pacsType || config.pacsType;
+      const label = getPacsTypeLabel(pacsType);
+      
+      // Block test if type is dicom-native (no HTTP)
+      if (pacsType === 'dicom-native') {
+        const host = s.pacsDicomHost || config.pacsDicomHost;
+        const port = s.pacsDicomPort || config.pacsDicomPort;
+        return reply.send({
+          success: false,
+          error: `Este test es para PACS HTTP — su configuración actual es "${label}"`,
+          hint: host
+            ? `Use el botón "Test Conexión TCP" en la sección DICOM Nativo para probar ${host}:${port}.`
+            : `Configure el Host/IP del PACS en la sección DICOM Nativo y use "Test Conexión TCP".`,
+          pacsType,
+          pacsTypeLabel: label
+        });
+      }
+      
+      // Validate URL
+      if (!pacsUrl || pacsUrl === 'http://localhost:8042' && pacsType === 'dicomweb') {
+        return reply.send({
+          success: false,
+          error: 'URL del PACS no configurada o usando valor por defecto de Orthanc',
+          hint: `Tiene seleccionado "${label}" pero la URL es "${pacsUrl}". Ingrese la URL correcta de su PACS.`,
+          pacsType,
+          pacsTypeLabel: label,
+          pacsUrl
+        });
+      }
       
       try {
         const startTime = Date.now();
@@ -127,11 +213,11 @@ export async function configRoutes(fastify: FastifyInstance): Promise<void> {
         
         if (pacsType === 'orthanc') {
           testUrl = `${pacsUrl}/system`;
-          testDescription = 'Orthanc /system';
+          testDescription = `${label} → GET /system`;
         } else {
           const qidoPath = s.pacsQidoEndpoint || config.dicomwebQidoPath;
           testUrl = `${pacsUrl}${qidoPath}?limit=1`;
-          testDescription = `QIDO-RS ${qidoPath}`;
+          testDescription = `${label} → QIDO-RS ${qidoPath}`;
         }
         
         const response = await fetch(testUrl, {
@@ -145,26 +231,47 @@ export async function configRoutes(fastify: FastifyInstance): Promise<void> {
         if (response.ok || response.status === 204) {
           return reply.send({
             success: true,
-            message: `Conexion exitosa (${latency}ms)`,
+            message: `✅ Conexión exitosa a ${label} (${latency}ms)`,
             endpoint: testDescription,
             status: response.status,
             pacsType,
+            pacsTypeLabel: label,
             pacsUrl
           });
         } else {
+          // Detect misconfig: Orthanc /system returns 404 → probably not Orthanc
+          let hint = '';
+          if (pacsType === 'orthanc' && response.status === 404) {
+            hint = `El endpoint /system respondió 404. Esto indica que el servidor probablemente NO es Orthanc. Si es FUJIFILM Synapse, DCM4CHEE u otro PACS DICOMweb, cambie el tipo a "DICOMweb" en la configuración.`;
+          } else if (response.status === 401 || response.status === 403) {
+            hint = `Acceso denegado. Verifique las credenciales de autenticación (${s.pacsAuthType || config.pacsAuthType}). Si el PACS requiere usuario/contraseña, configúrelos en la sección de autenticación.`;
+          } else if (response.status === 404) {
+            hint = `Endpoint no encontrado. Verifique que la URL base "${pacsUrl}" sea correcta y que los paths DICOMweb coincidan con su PACS.`;
+          } else if (response.status === 502 || response.status === 503) {
+            hint = `El servidor respondió pero el servicio PACS no está disponible. Puede estar iniciando o en mantenimiento.`;
+          } else {
+            hint = `Respuesta inesperada del PACS. Verifique que la configuración tipo "${label}" coincida con su servidor real.`;
+          }
+          
           return reply.send({
             success: false,
             error: `HTTP ${response.status} - ${response.statusText}`,
+            hint,
             endpoint: testDescription,
+            testedUrl: testUrl,
             pacsType,
+            pacsTypeLabel: label,
             pacsUrl
           });
         }
       } catch (error) {
-        const msg = error instanceof Error ? error.message : 'Error desconocido';
+        const diag = diagnoseError(error, { pacsType, url: pacsUrl });
         return reply.send({
           success: false,
-          error: msg,
+          error: `Error conectando a ${label}: ${diag.error}`,
+          hint: diag.hint,
+          pacsType,
+          pacsTypeLabel: label,
           pacsUrl
         });
       }
@@ -179,6 +286,18 @@ export async function configRoutes(fastify: FastifyInstance): Promise<void> {
       const pacsUrl = s.pacsBaseUrl || config.pacsUrl;
       const pacsType = s.pacsType || config.pacsType;
       const stowPath = s.pacsStowEndpoint || config.dicomwebStowPath;
+      const label = getPacsTypeLabel(pacsType);
+      
+      // Block test if type is dicom-native
+      if (pacsType === 'dicom-native') {
+        return reply.send({
+          success: false,
+          error: `STOW-RS no aplica para "${label}"`,
+          hint: 'El envío de imágenes en DICOM Nativo usa C-STORE (TCP), no STOW-RS (HTTP). Use "Test Conexión TCP" en la sección DICOM Nativo.',
+          pacsType,
+          pacsTypeLabel: label
+        });
+      }
       
       try {
         const startTime = Date.now();
@@ -187,10 +306,10 @@ export async function configRoutes(fastify: FastifyInstance): Promise<void> {
         
         if (pacsType === 'orthanc') {
           testUrl = `${pacsUrl}/instances`;
-          testDescription = 'Orthanc /instances';
+          testDescription = `${label} → POST /instances`;
         } else {
           testUrl = `${pacsUrl}${stowPath}`;
-          testDescription = `STOW-RS ${stowPath}`;
+          testDescription = `${label} → STOW-RS ${stowPath}`;
         }
         
         const response = await fetch(testUrl, {
@@ -204,27 +323,44 @@ export async function configRoutes(fastify: FastifyInstance): Promise<void> {
         if (response.ok || response.status === 405 || response.status === 204) {
           return reply.send({
             success: true,
-            message: `Endpoint STOW accesible (${latency}ms)`,
+            message: `✅ Endpoint STOW accesible en ${label} (${latency}ms)`,
             endpoint: testDescription,
             stowUrl: testUrl,
             status: response.status,
-            pacsType
+            pacsType,
+            pacsTypeLabel: label
           });
         } else {
+          let hint = '';
+          if (response.status === 404) {
+            hint = pacsType === 'orthanc'
+              ? `El endpoint /instances no existe. Verifique que la URL "${pacsUrl}" apunta a un Orthanc real. Si es otro tipo de PACS, cambie el tipo en la configuración.`
+              : `El path STOW "${stowPath}" no existe en ${pacsUrl}. Verifique que el path sea correcto para su PACS (${label}).`;
+          } else if (response.status === 401 || response.status === 403) {
+            hint = `Sin autorización para STOW. Verifique credenciales y permisos de escritura en el PACS.`;
+          } else {
+            hint = `Respuesta inesperada. Confirme que el tipo "${label}" y URL "${pacsUrl}" son correctos.`;
+          }
+          
           return reply.send({
             success: false,
             error: `HTTP ${response.status} - ${response.statusText}`,
+            hint,
             endpoint: testDescription,
             stowUrl: testUrl,
-            pacsType
+            pacsType,
+            pacsTypeLabel: label
           });
         }
       } catch (error) {
-        const msg = error instanceof Error ? error.message : 'Error desconocido';
+        const diag = diagnoseError(error, { pacsType, url: pacsUrl });
         return reply.send({
           success: false,
-          error: msg,
-          stowUrl: `${pacsUrl}${stowPath}`
+          error: `Error conectando a ${label} (STOW): ${diag.error}`,
+          hint: diag.hint,
+          stowUrl: `${pacsUrl}${stowPath}`,
+          pacsType,
+          pacsTypeLabel: label
         });
       }
     }
@@ -234,6 +370,11 @@ export async function configRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.post('/api/config/test-worklist', {
     preHandler: dashboardAuth,
     handler: async (request: FastifyRequest, reply: FastifyReply) => {
+      const s = configStore.getAll();
+      const pacsType = s.pacsType || config.pacsType;
+      const pacsUrl = s.pacsBaseUrl || config.pacsUrl;
+      const label = getPacsTypeLabel(pacsType);
+      
       try {
         const startTime = Date.now();
         const result = await queryWorklist({ limit: 5 });
@@ -241,13 +382,16 @@ export async function configRoutes(fastify: FastifyInstance): Promise<void> {
         const worklistConfig = getWorklistConfig();
         
         if (result.success) {
+          const itemCount = result.items.length;
           return reply.send({
             success: true,
-            message: `Worklist OK (${result.items.length} items encontrados)`,
+            message: `✅ Worklist OK — ${itemCount} item${itemCount !== 1 ? 's' : ''} encontrado${itemCount !== 1 ? 's' : ''} (${latency}ms)`,
             source: result.source,
-            itemCount: result.items.length,
-            totalAvailable: result.total || result.items.length,
+            itemCount,
+            totalAvailable: result.total || itemCount,
             latency: `${latency}ms`,
+            pacsType,
+            pacsTypeLabel: label,
             config: worklistConfig,
             preview: result.items.slice(0, 3).map(item => ({
               accessionNumber: item.accessionNumber,
@@ -259,16 +403,42 @@ export async function configRoutes(fastify: FastifyInstance): Promise<void> {
             }))
           });
         } else {
+          let hint = '';
+          const errMsg = result.error || 'No se pudo consultar el Worklist';
+          
+          if (/404/i.test(errMsg)) {
+            hint = `El endpoint de worklist no existe en el PACS. Verifique que los paths UPS-RS / MWL sean correctos para su PACS tipo "${label}".`;
+          } else if (/401|403|unauthorized/i.test(errMsg)) {
+            hint = `Sin autorización para consultar Worklist. Verifique credenciales.`;
+          } else if (/ECONNREFUSED/i.test(errMsg)) {
+            hint = `No se pudo conectar a ${pacsUrl}. Verifique que el PACS (${label}) esté corriendo.`;
+          } else if (pacsType === 'dicom-native') {
+            hint = `El worklist HTTP no aplica para DICOM Nativo. La MWL se consulta por C-FIND (TCP) — verifique la config de conexión TCP.`;
+          } else if (result.source === 'mock') {
+            hint = `El worklist está en modo MOCK (datos de prueba). Para conectar al PACS real, cambie WORKLIST_MODE a "pacs" en la configuración.`;
+          } else {
+            hint = `Verifique que su PACS (${label}) soporte Worklist y que los endpoints estén configurados correctamente.`;
+          }
+          
           return reply.send({
             success: false,
-            error: result.error || 'No se pudo consultar el Worklist',
+            error: errMsg,
+            hint,
             source: result.source,
+            pacsType,
+            pacsTypeLabel: label,
             config: worklistConfig
           });
         }
       } catch (error) {
-        const msg = error instanceof Error ? error.message : 'Error desconocido';
-        return reply.send({ success: false, error: msg });
+        const diag = diagnoseError(error, { pacsType, url: pacsUrl });
+        return reply.send({
+          success: false,
+          error: `Error en Worklist (${label}): ${diag.error}`,
+          hint: diag.hint,
+          pacsType,
+          pacsTypeLabel: label
+        });
       }
     }
   });
@@ -297,7 +467,7 @@ export async function configRoutes(fastify: FastifyInstance): Promise<void> {
           const socket = new net.default.Socket();
           const timeout = setTimeout(() => {
             socket.destroy();
-            resolve({ success: false, error: `Timeout conectando a ${host}:${port}` });
+            resolve({ success: false, error: `Timeout conectando a ${host}:${port} (>5s)` });
           }, 5000);
           
           socket.connect(port, host, () => {
@@ -317,25 +487,37 @@ export async function configRoutes(fastify: FastifyInstance): Promise<void> {
         if (result.success) {
           return reply.send({
             success: true,
-            message: `TCP OK - Puerto ${port} accesible (${latency}ms)`,
+            message: `✅ TCP OK — Puerto ${port} accesible en ${host} (${latency}ms)`,
+            pacsType: 'dicom-native',
+            pacsTypeLabel: getPacsTypeLabel('dicom-native'),
             details: {
               host,
               port,
               callingAet,
               calledAet,
-              note: 'Conexion TCP exitosa. Para C-ECHO completo se requiere libreria DICOM (dcmtk/dimse).'
+              note: 'Conexión TCP exitosa. El PACS acepta conexiones en este puerto. Asegúrese de que el AE Title del Gateway esté registrado en el PACS.'
             }
           });
         } else {
+          const diag = diagnoseError(new Error(result.error || ''), { pacsType: 'dicom-native', host, port });
           return reply.send({
             success: false,
-            error: result.error,
+            error: `Error TCP a ${host}:${port} — ${result.error}`,
+            hint: diag.hint,
+            pacsType: 'dicom-native',
+            pacsTypeLabel: getPacsTypeLabel('dicom-native'),
             details: { host, port, callingAet, calledAet }
           });
         }
       } catch (error) {
-        const msg = error instanceof Error ? error.message : 'Error desconocido';
-        return reply.send({ success: false, error: msg });
+        const diag = diagnoseError(error, { pacsType: 'dicom-native', host, port });
+        return reply.send({
+          success: false,
+          error: `Error en test TCP: ${diag.error}`,
+          hint: diag.hint,
+          pacsType: 'dicom-native',
+          pacsTypeLabel: getPacsTypeLabel('dicom-native')
+        });
       }
     }
   });
@@ -747,12 +929,23 @@ function generateConfigHtml(): string {
         var resp = await fetch('/api/config/test-pacs', { method: 'POST', credentials: 'include' });
         var result = await resp.json();
         if (result.success) {
-          resultDiv.innerHTML = '<div class="test-result" style="background:#dcfce7;">\u2705 ' + result.message + '\\nEndpoint: ' + result.endpoint + '\\nURL: ' + result.pacsUrl + '</div>';
+          resultDiv.innerHTML = '<div class="test-result" style="background:#dcfce7;">'
+            + result.message
+            + '\nEndpoint: ' + result.endpoint
+            + '\nURL: ' + result.pacsUrl
+            + '\nTipo: ' + (result.pacsTypeLabel || result.pacsType)
+            + '</div>';
         } else {
-          resultDiv.innerHTML = '<div class="test-result" style="background:#fee2e2;">\u274C ' + result.error + '\\nURL: ' + result.pacsUrl + '</div>';
+          var hint = result.hint ? '\n\n\uD83D\uDCA1 ' + result.hint : '';
+          resultDiv.innerHTML = '<div class="test-result" style="background:#fee2e2;">\u274C ' + result.error
+            + (result.endpoint ? '\nEndpoint: ' + result.endpoint : '')
+            + (result.pacsUrl ? '\nURL: ' + result.pacsUrl : '')
+            + '\nTipo configurado: ' + (result.pacsTypeLabel || result.pacsType || 'desconocido')
+            + hint
+            + '</div>';
         }
       } catch (e) {
-        resultDiv.innerHTML = '<div class="test-result" style="background:#fee2e2;">\u274C ' + e.message + '</div>';
+        resultDiv.innerHTML = '<div class="test-result" style="background:#fee2e2;">\u274C Error de red: ' + e.message + '\n\n\uD83D\uDCA1 No se pudo conectar al Gateway. Verifique que est\u00e9 corriendo.</div>';
       }
     }
 
@@ -764,12 +957,23 @@ function generateConfigHtml(): string {
         var resp = await fetch('/api/config/test-stow', { method: 'POST', credentials: 'include' });
         var result = await resp.json();
         if (result.success) {
-          resultDiv.innerHTML = '<div class="test-result" style="background:#dcfce7;">\u2705 ' + result.message + '\\nEndpoint: ' + result.endpoint + '\\nURL: ' + result.stowUrl + '</div>';
+          resultDiv.innerHTML = '<div class="test-result" style="background:#dcfce7;">'
+            + result.message
+            + '\nEndpoint: ' + result.endpoint
+            + '\nURL: ' + result.stowUrl
+            + '\nTipo: ' + (result.pacsTypeLabel || result.pacsType)
+            + '</div>';
         } else {
-          resultDiv.innerHTML = '<div class="test-result" style="background:#fee2e2;">\u274C ' + result.error + '\\nURL: ' + result.stowUrl + '</div>';
+          var hint = result.hint ? '\n\n\uD83D\uDCA1 ' + result.hint : '';
+          resultDiv.innerHTML = '<div class="test-result" style="background:#fee2e2;">\u274C ' + result.error
+            + (result.endpoint ? '\nEndpoint: ' + result.endpoint : '')
+            + (result.stowUrl ? '\nURL: ' + result.stowUrl : '')
+            + '\nTipo configurado: ' + (result.pacsTypeLabel || result.pacsType || 'desconocido')
+            + hint
+            + '</div>';
         }
       } catch (e) {
-        resultDiv.innerHTML = '<div class="test-result" style="background:#fee2e2;">\u274C ' + e.message + '</div>';
+        resultDiv.innerHTML = '<div class="test-result" style="background:#fee2e2;">\u274C Error de red: ' + e.message + '</div>';
       }
     }
 
@@ -787,12 +991,23 @@ function generateConfigHtml(): string {
               return '\u2022 ' + (item.patientName || 'Sin nombre') + ' - ' + (item.accessionNumber || 'Sin accession') + ' - ' + (item.description || '');
             }).join('\\n');
           }
-          resultDiv.innerHTML = '<div class="test-result" style="background:#dcfce7;">\u2705 ' + result.message + '\\nFuente: ' + result.source + '\\nLatencia: ' + result.latency + preview + '</div>';
+          resultDiv.innerHTML = '<div class="test-result" style="background:#dcfce7;">'
+            + result.message
+            + '\\nFuente: ' + result.source
+            + '\\nTipo PACS: ' + (result.pacsTypeLabel || result.pacsType)
+            + '\\nLatencia: ' + result.latency
+            + preview
+            + '</div>';
         } else {
-          resultDiv.innerHTML = '<div class="test-result" style="background:#fee2e2;">\u274C ' + result.error + '\\nFuente: ' + (result.source || 'desconocida') + '</div>';
+          var hint = result.hint ? '\\n\\n\uD83D\uDCA1 ' + result.hint : '';
+          resultDiv.innerHTML = '<div class="test-result" style="background:#fee2e2;">\u274C ' + result.error
+            + '\\nFuente: ' + (result.source || 'desconocida')
+            + '\\nTipo configurado: ' + (result.pacsTypeLabel || result.pacsType || 'desconocido')
+            + hint
+            + '</div>';
         }
       } catch (e) {
-        resultDiv.innerHTML = '<div class="test-result" style="background:#fee2e2;">\u274C ' + e.message + '</div>';
+        resultDiv.innerHTML = '<div class="test-result" style="background:#fee2e2;">\u274C Error de red: ' + e.message + '</div>';
       }
     }
 
@@ -805,19 +1020,26 @@ function generateConfigHtml(): string {
         var result = await resp.json();
         if (result.success) {
           var details = result.details || {};
-          resultDiv.innerHTML = '<div class="test-result" style="background:#dcfce7;">\u2705 ' + result.message + 
-            '\\n\\nDetalles:' +
-            '\\n  Host: ' + (details.host || '-') + 
-            '\\n  Port: ' + (details.port || '-') + 
-            '\\n  Calling AET: ' + (details.callingAet || '-') + 
-            '\\n  Called AET: ' + (details.calledAet || '-') + 
-            (details.note ? '\\n\\n\U0001F4A1 ' + details.note : '') +
-            '</div>';
+          resultDiv.innerHTML = '<div class="test-result" style="background:#dcfce7;">'
+            + result.message
+            + '\\n\\nDetalles:'
+            + '\\n  Host: ' + (details.host || '-')
+            + '\\n  Port: ' + (details.port || '-')
+            + '\\n  Calling AET (Gateway): ' + (details.callingAet || '-')
+            + '\\n  Called AET (PACS): ' + (details.calledAet || '-')
+            + (details.note ? '\\n\\n\uD83D\uDCA1 ' + details.note : '')
+            + '</div>';
         } else {
-          resultDiv.innerHTML = '<div class="test-result" style="background:#fee2e2;">\u274C ' + result.error + '</div>';
+          var hint = result.hint ? '\\n\\n\uD83D\uDCA1 ' + result.hint : '';
+          var details = result.details || {};
+          resultDiv.innerHTML = '<div class="test-result" style="background:#fee2e2;">\u274C ' + result.error
+            + (details.host ? '\\n  Host: ' + details.host + ':' + details.port : '')
+            + (details.calledAet ? '\\n  PACS AE Title: ' + details.calledAet : '')
+            + hint
+            + '</div>';
         }
       } catch (e) {
-        resultDiv.innerHTML = '<div class="test-result" style="background:#fee2e2;">\u274C ' + e.message + '</div>';
+        resultDiv.innerHTML = '<div class="test-result" style="background:#fee2e2;">\u274C Error de red: ' + e.message + '</div>';
       }
     }
 
