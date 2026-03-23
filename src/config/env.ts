@@ -1,55 +1,61 @@
 import dotenv from 'dotenv';
 dotenv.config();
 
+import { configStore } from './config-store.js';
+
+// Pre-load JSON config
+const store = configStore;
+store.load();
+
 export type PacsType = 'orthanc' | 'dicomweb' | 'dicom-native';
 export type AuthType = 'none' | 'basic' | 'bearer';
 
 export const config = {
   // ===== IDENTIDAD DEL CENTRO =====
-  centroNombre: process.env.CENTRO_NOMBRE || 'Mi Centro Médico',
-  centroId: process.env.CENTRO_ID || 'CENTRO01',
+  centroNombre: store.getOrEnv('centroNombre', 'CENTRO_NOMBRE', 'Mi Centro Medico'),
+  centroId: store.getOrEnv('centroId', 'CENTRO_ID', 'CENTRO01'),
 
   // ===== GATEWAY =====
-  port: parseInt(process.env.PORT || '3001', 10),
+  port: store.getNumOrEnv('port', 'PORT', 3001),
   nodeEnv: process.env.NODE_ENV || 'development',
 
   // ===== SEGURIDAD =====
-  apiKey: process.env.API_KEY || 'dev-api-key-cambiar',
-  dashboardUser: process.env.DASHBOARD_USER || 'admin',
-  dashboardPassword: process.env.DASHBOARD_PASSWORD || 'admin123',
-  allowedOrigins: (process.env.ALLOWED_ORIGINS || 'http://localhost:5173,http://localhost:3000')
+  apiKey: store.getOrEnv('apiKey', 'API_KEY', 'dev-api-key-cambiar'),
+  dashboardUser: store.getOrEnv('dashboardUser', 'DASHBOARD_USER', 'admin'),
+  dashboardPassword: store.getOrEnv('dashboardPassword', 'DASHBOARD_PASSWORD', 'admin123'),
+  allowedOrigins: store.getOrEnv('allowedOrigins', 'ALLOWED_ORIGINS', 'http://localhost:5173,http://localhost:3000')
     .split(',')
     .map(o => o.trim()),
 
   // ===== PACS =====
-  pacsType: (process.env.PACS_TYPE || 'orthanc') as PacsType,
-  pacsBaseUrl: process.env.PACS_BASE_URL || 'http://localhost:8042',
+  pacsType: store.getOrEnv('pacsType', 'PACS_TYPE', 'orthanc') as PacsType,
+  pacsBaseUrl: store.getOrEnv('pacsBaseUrl', 'PACS_BASE_URL', 'http://localhost:8042'),
   
-  // Autenticación PACS
-  pacsAuthType: (process.env.PACS_AUTH_TYPE || 'none') as AuthType,
-  pacsUsername: process.env.PACS_USERNAME || '',
-  pacsPassword: process.env.PACS_PASSWORD || '',
-  pacsToken: process.env.PACS_TOKEN || '',
+  // Autenticacion PACS
+  pacsAuthType: store.getOrEnv('pacsAuthType', 'PACS_AUTH_TYPE', 'none') as AuthType,
+  pacsUsername: store.getOrEnv('pacsUsername', 'PACS_USERNAME', ''),
+  pacsPassword: store.getOrEnv('pacsPassword', 'PACS_PASSWORD', ''),
+  pacsToken: store.getOrEnv('pacsToken', 'PACS_TOKEN', ''),
 
   // ===== DICOM NATIVO (TCP) =====
-  gatewayAeTitle: process.env.GATEWAY_AE_TITLE || 'ANDEX_GW',
-  pacsDicomHost: process.env.PACS_DICOM_HOST || '',
-  pacsDicomPort: parseInt(process.env.PACS_DICOM_PORT || '104', 10),
-  pacsAeTitle: process.env.PACS_AE_TITLE || '',
-  gatewayDicomPort: parseInt(process.env.GATEWAY_DICOM_PORT || '11113', 10),
+  gatewayAeTitle: store.getOrEnv('gatewayAeTitle', 'GATEWAY_AE_TITLE', 'ANDEX_GW'),
+  pacsDicomHost: store.getOrEnv('pacsDicomHost', 'PACS_DICOM_HOST', ''),
+  pacsDicomPort: store.getNumOrEnv('pacsDicomPort', 'PACS_DICOM_PORT', 104),
+  pacsAeTitle: store.getOrEnv('pacsAeTitle', 'PACS_AE_TITLE', ''),
+  gatewayDicomPort: store.getNumOrEnv('gatewayDicomPort', 'GATEWAY_DICOM_PORT', 11113),
 
   // ===== DICOMweb ENDPOINTS =====
-  pacsStowEndpoint: process.env.PACS_STOW_ENDPOINT || '/dicomweb/studies',
-  pacsQidoEndpoint: process.env.PACS_QIDO_ENDPOINT || '/dicomweb/studies',
-  pacsWadoEndpoint: process.env.PACS_WADO_ENDPOINT || '/dicomweb/studies',
+  pacsStowEndpoint: store.getOrEnv('pacsStowEndpoint', 'PACS_STOW_ENDPOINT', '/dicomweb/studies'),
+  pacsQidoEndpoint: store.getOrEnv('pacsQidoEndpoint', 'PACS_QIDO_ENDPOINT', '/dicomweb/studies'),
+  pacsWadoEndpoint: store.getOrEnv('pacsWadoEndpoint', 'PACS_WADO_ENDPOINT', '/dicomweb/studies'),
   
   // ===== WORKLIST =====
-  worklistMode: (process.env.WORKLIST_MODE || 'pacs') as 'mock' | 'pacs',
-  worklistEndpoint: process.env.WORKLIST_ENDPOINT || '/dicomweb/workitems',
-  worklistMwlEndpoint: process.env.WORKLIST_MWL_ENDPOINT || '/dicomweb/mwlitems',
-  worklistPreferUps: process.env.WORKLIST_PREFER_UPS !== 'false',
-  worklistDefaultModality: process.env.WORKLIST_DEFAULT_MODALITY || 'ES',
-  worklistStationAET: process.env.WORKLIST_STATION_AET || '',
+  worklistMode: store.getOrEnv('worklistMode', 'WORKLIST_MODE', 'pacs') as 'mock' | 'pacs',
+  worklistEndpoint: store.getOrEnv('worklistEndpoint', 'WORKLIST_ENDPOINT', '/dicomweb/workitems'),
+  worklistMwlEndpoint: store.getOrEnv('worklistMwlEndpoint', 'WORKLIST_MWL_ENDPOINT', '/dicomweb/mwlitems'),
+  worklistPreferUps: store.getBoolOrEnv('worklistPreferUps', 'WORKLIST_PREFER_UPS', true),
+  worklistDefaultModality: store.getOrEnv('worklistDefaultModality', 'WORKLIST_DEFAULT_MODALITY', 'ES'),
+  worklistStationAET: store.getOrEnv('worklistStationAET', 'WORKLIST_STATION_AET', ''),
 
   // ===== STORAGE =====
   storagePath: process.env.STORAGE_PATH || './data',

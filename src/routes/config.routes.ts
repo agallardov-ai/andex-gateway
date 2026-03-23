@@ -1,21 +1,18 @@
 /**
  * Config Routes - Andex Gateway
  * UI y API para configurar el PACS y Worklist
+ * Configuracion persistida en data/gateway-config.json
  */
 
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { config } from '../config/env.js';
 import { dashboardAuth } from '../plugins/auth.plugin.js';
 import { queryWorklist, getWorklistConfig, configureWorklist } from '../services/worklist.service.js';
-import fs from 'fs';
-import path from 'path';
-
-// Runtime config (overrides .env)
-let runtimeConfig: Record<string, string> = {};
+import { configStore } from '../config/config-store.js';
 
 export async function configRoutes(fastify: FastifyInstance): Promise<void> {
 
-  // GET /config - Página de configuración
+  // GET /config - Pagina de configuracion
   fastify.get('/config', {
     preHandler: dashboardAuth,
     handler: async (request: FastifyRequest, reply: FastifyReply) => {
@@ -24,130 +21,110 @@ export async function configRoutes(fastify: FastifyInstance): Promise<void> {
     }
   });
 
-  // GET /api/config - Obtener configuración actual
+  // GET /api/config - Obtener configuracion actual
   fastify.get('/api/config', {
     preHandler: dashboardAuth,
     handler: async (request: FastifyRequest, reply: FastifyReply) => {
+      const s = configStore.getAll();
       return reply.send({
         success: true,
         config: {
-          centroNombre: runtimeConfig.CENTRO_NOMBRE || config.centroNombre,
-          centroId: runtimeConfig.CENTRO_ID || config.centroId,
-          pacsType: runtimeConfig.PACS_TYPE || config.pacsType,
-          pacsUrl: runtimeConfig.PACS_URL || config.pacsUrl,
-          pacsAuthType: runtimeConfig.PACS_AUTH_TYPE || config.pacsAuthType,
-          pacsUsername: runtimeConfig.PACS_USERNAME || config.pacsUsername,
-          // DICOMweb paths
-          dicomwebStowPath: runtimeConfig.DICOMWEB_STOW_PATH || config.dicomwebStowPath,
-          dicomwebQidoPath: runtimeConfig.DICOMWEB_QIDO_PATH || config.dicomwebQidoPath,
-          dicomwebWadoPath: runtimeConfig.DICOMWEB_WADO_PATH || config.dicomwebWadoPath,
-          // DICOM Native (TCP)
-          gatewayAeTitle: runtimeConfig.GATEWAY_AE_TITLE || config.gatewayAeTitle,
-          pacsDicomHost: runtimeConfig.PACS_DICOM_HOST || config.pacsDicomHost,
-          pacsDicomPort: parseInt(runtimeConfig.PACS_DICOM_PORT || String(config.pacsDicomPort)),
-          pacsAeTitle: runtimeConfig.PACS_AE_TITLE || config.pacsAeTitle,
-          gatewayDicomPort: parseInt(runtimeConfig.GATEWAY_DICOM_PORT || String(config.gatewayDicomPort)),
-          // Worklist paths
-          worklistUpsPath: runtimeConfig.WORKLIST_UPS_PATH || config.worklistUpsPath,
-          worklistQidoMwlPath: runtimeConfig.WORKLIST_QIDO_MWL_PATH || config.worklistQidoMwlPath,
-          worklistPreferUps: runtimeConfig.WORKLIST_PREFER_UPS !== 'false',
+          centroNombre: s.centroNombre || config.centroNombre,
+          centroId: s.centroId || config.centroId,
+          apiKey: s.apiKey || config.apiKey,
+          dashboardUser: s.dashboardUser || config.dashboardUser,
+          allowedOrigins: s.allowedOrigins || config.allowedOrigins.join(','),
+          pacsType: s.pacsType || config.pacsType,
+          pacsUrl: s.pacsBaseUrl || config.pacsBaseUrl,
+          pacsAuthType: s.pacsAuthType || config.pacsAuthType,
+          pacsUsername: s.pacsUsername || config.pacsUsername,
+          dicomwebStowPath: s.pacsStowEndpoint || config.dicomwebStowPath,
+          dicomwebQidoPath: s.pacsQidoEndpoint || config.dicomwebQidoPath,
+          dicomwebWadoPath: s.pacsWadoEndpoint || config.dicomwebWadoPath,
+          gatewayAeTitle: s.gatewayAeTitle || config.gatewayAeTitle,
+          pacsDicomHost: s.pacsDicomHost || config.pacsDicomHost,
+          pacsDicomPort: s.pacsDicomPort || config.pacsDicomPort,
+          pacsAeTitle: s.pacsAeTitle || config.pacsAeTitle,
+          gatewayDicomPort: s.gatewayDicomPort || config.gatewayDicomPort,
+          worklistUpsPath: s.worklistEndpoint || config.worklistUpsPath,
+          worklistQidoMwlPath: s.worklistMwlEndpoint || config.worklistQidoMwlPath,
+          worklistPreferUps: s.worklistPreferUps !== undefined ? s.worklistPreferUps : config.worklistPreferUps,
+          supabaseUrl: s.supabaseUrl || process.env.SUPABASE_URL || '',
+          supabaseAnonKey: s.supabaseAnonKey || process.env.SUPABASE_ANON_KEY || '',
+          supabaseCentroToken: s.supabaseCentroToken || process.env.SUPABASE_CENTRO_TOKEN || '',
         }
       });
     }
   });
 
-  // POST /api/config - Actualizar configuración
+  // POST /api/config - Guardar configuracion en gateway-config.json
   fastify.post<{ Body: Record<string, any> }>('/api/config', {
     preHandler: dashboardAuth,
     handler: async (request: FastifyRequest<{ Body: Record<string, any> }>, reply: FastifyReply) => {
       const body = request.body;
       
-      // Centro
-      if (body.centroNombre) runtimeConfig.CENTRO_NOMBRE = body.centroNombre;
-      if (body.centroId) runtimeConfig.CENTRO_ID = body.centroId;
+      const updates: Record<string, any> = {};
+      if (body.centroNombre) updates.centroNombre = body.centroNombre;
+      if (body.centroId) updates.centroId = body.centroId;
+      if (body.apiKey) updates.apiKey = body.apiKey;
+      if (body.dashboardUser) updates.dashboardUser = body.dashboardUser;
+      if (body.dashboardPassword) updates.dashboardPassword = body.dashboardPassword;
+      if (body.allowedOrigins) updates.allowedOrigins = body.allowedOrigins;
+      if (body.pacsType) updates.pacsType = body.pacsType;
+      if (body.pacsUrl) updates.pacsBaseUrl = body.pacsUrl;
+      if (body.pacsAuthType) updates.pacsAuthType = body.pacsAuthType;
+      if (body.pacsUsername !== undefined) updates.pacsUsername = body.pacsUsername;
+      if (body.pacsPassword) updates.pacsPassword = body.pacsPassword;
+      if (body.gatewayAeTitle) updates.gatewayAeTitle = body.gatewayAeTitle;
+      if (body.pacsDicomHost !== undefined) updates.pacsDicomHost = body.pacsDicomHost;
+      if (body.pacsDicomPort) updates.pacsDicomPort = body.pacsDicomPort;
+      if (body.pacsAeTitle !== undefined) updates.pacsAeTitle = body.pacsAeTitle;
+      if (body.gatewayDicomPort) updates.gatewayDicomPort = body.gatewayDicomPort;
+      if (body.dicomwebStowPath) updates.pacsStowEndpoint = body.dicomwebStowPath;
+      if (body.dicomwebQidoPath) updates.pacsQidoEndpoint = body.dicomwebQidoPath;
+      if (body.dicomwebWadoPath) updates.pacsWadoEndpoint = body.dicomwebWadoPath;
+      if (body.worklistUpsPath) updates.worklistEndpoint = body.worklistUpsPath;
+      if (body.worklistQidoMwlPath) updates.worklistMwlEndpoint = body.worklistQidoMwlPath;
+      if (body.worklistPreferUps !== undefined) updates.worklistPreferUps = !!body.worklistPreferUps;
+      if (body.supabaseUrl !== undefined) updates.supabaseUrl = body.supabaseUrl;
+      if (body.supabaseAnonKey !== undefined) updates.supabaseAnonKey = body.supabaseAnonKey;
+      if (body.supabaseCentroToken !== undefined) updates.supabaseCentroToken = body.supabaseCentroToken;
       
-      // PACS
-      if (body.pacsType) runtimeConfig.PACS_TYPE = body.pacsType;
-      if (body.pacsUrl) runtimeConfig.PACS_URL = body.pacsUrl;
-      if (body.pacsAuthType) runtimeConfig.PACS_AUTH_TYPE = body.pacsAuthType;
-      if (body.pacsUsername) runtimeConfig.PACS_USERNAME = body.pacsUsername;
-      if (body.pacsPassword) runtimeConfig.PACS_PASSWORD = body.pacsPassword;
+      const result = configStore.save(updates);
       
-      // DICOM Native (TCP)
-      if (body.gatewayAeTitle) runtimeConfig.GATEWAY_AE_TITLE = body.gatewayAeTitle;
-      if (body.pacsDicomHost) runtimeConfig.PACS_DICOM_HOST = body.pacsDicomHost;
-      if (body.pacsDicomPort) runtimeConfig.PACS_DICOM_PORT = String(body.pacsDicomPort);
-      if (body.pacsAeTitle) runtimeConfig.PACS_AE_TITLE = body.pacsAeTitle;
-      if (body.gatewayDicomPort) runtimeConfig.GATEWAY_DICOM_PORT = String(body.gatewayDicomPort);
-      
-      // DICOMweb paths
-      if (body.dicomwebStowPath) runtimeConfig.DICOMWEB_STOW_PATH = body.dicomwebStowPath;
-      if (body.dicomwebQidoPath) runtimeConfig.DICOMWEB_QIDO_PATH = body.dicomwebQidoPath;
-      if (body.dicomwebWadoPath) runtimeConfig.DICOMWEB_WADO_PATH = body.dicomwebWadoPath;
-      
-      // Worklist paths
-      if (body.worklistUpsPath) runtimeConfig.WORKLIST_UPS_PATH = body.worklistUpsPath;
-      if (body.worklistQidoMwlPath) runtimeConfig.WORKLIST_QIDO_MWL_PATH = body.worklistQidoMwlPath;
-      if (body.worklistPreferUps !== undefined) {
-        runtimeConfig.WORKLIST_PREFER_UPS = body.worklistPreferUps ? 'true' : 'false';
+      if (!result.success) {
+        return reply.status(500).send({ success: false, error: result.error });
       }
       
-      // Update worklist service config
-      configureWorklist({
-        baseUrl: runtimeConfig.PACS_URL || config.pacsUrl,
-        authType: (runtimeConfig.PACS_AUTH_TYPE || config.pacsAuthType) as 'none' | 'basic' | 'bearer',
-        username: runtimeConfig.PACS_USERNAME || config.pacsUsername,
-        password: runtimeConfig.PACS_PASSWORD || config.pacsPassword,
-        upsPath: runtimeConfig.WORKLIST_UPS_PATH || config.worklistUpsPath,
-        qidoMwlPath: runtimeConfig.WORKLIST_QIDO_MWL_PATH || config.worklistQidoMwlPath,
-        preferUps: runtimeConfig.WORKLIST_PREFER_UPS !== 'false',
-      });
+      // Update worklist service config live
+      try {
+        configureWorklist({
+          baseUrl: body.pacsUrl || config.pacsUrl,
+          authType: (body.pacsAuthType || config.pacsAuthType) as 'none' | 'basic' | 'bearer',
+          username: body.pacsUsername || config.pacsUsername,
+          password: body.pacsPassword || config.pacsPassword,
+          upsPath: body.worklistUpsPath || config.worklistUpsPath,
+          qidoMwlPath: body.worklistQidoMwlPath || config.worklistQidoMwlPath,
+          preferUps: body.worklistPreferUps !== false,
+        });
+      } catch (e) { /* non-critical */ }
       
-      console.log('🔧 Configuración actualizada:', Object.keys(body).join(', '));
+      console.log('\u{1F527} Config guardada:', Object.keys(updates).join(', '));
       
       return reply.send({
         success: true,
-        message: 'Configuración actualizada (en memoria). Reinicie para aplicar cambios permanentes.'
+        message: 'Configuracion guardada. Reinicie el Gateway para aplicar todos los cambios.'
       });
     }
   });
 
-  // POST /api/config/save - Guardar a .env
-  fastify.post('/api/config/save', {
-    preHandler: dashboardAuth,
-    handler: async (request: FastifyRequest, reply: FastifyReply) => {
-      try {
-        const envPath = path.join(process.cwd(), '.env');
-        let envContent = fs.existsSync(envPath) ? fs.readFileSync(envPath, 'utf-8') : '';
-        
-        for (const [key, value] of Object.entries(runtimeConfig)) {
-          const regex = new RegExp(`^${key}=.*$`, 'm');
-          if (regex.test(envContent)) {
-            envContent = envContent.replace(regex, `${key}=${value}`);
-          } else {
-            envContent += `\n${key}=${value}`;
-          }
-        }
-        
-        fs.writeFileSync(envPath, envContent.trim() + '\n');
-        
-        return reply.send({
-          success: true,
-          message: 'Configuración guardada en .env. Reinicie el Gateway para aplicar.'
-        });
-      } catch (error) {
-        const msg = error instanceof Error ? error.message : 'Error desconocido';
-        return reply.status(500).send({ success: false, error: msg });
-      }
-    }
-  });
-
-  // POST /api/config/test-pacs - Probar conexión PACS (STOW endpoint)
+  // POST /api/config/test-pacs - Probar conexion PACS
   fastify.post('/api/config/test-pacs', {
     preHandler: dashboardAuth,
     handler: async (request: FastifyRequest, reply: FastifyReply) => {
-      const pacsUrl = runtimeConfig.PACS_URL || config.pacsUrl;
-      const pacsType = runtimeConfig.PACS_TYPE || config.pacsType;
+      const s = configStore.getAll();
+      const pacsUrl = s.pacsBaseUrl || config.pacsUrl;
+      const pacsType = s.pacsType || config.pacsType;
       
       try {
         const startTime = Date.now();
@@ -158,8 +135,7 @@ export async function configRoutes(fastify: FastifyInstance): Promise<void> {
           testUrl = `${pacsUrl}/system`;
           testDescription = 'Orthanc /system';
         } else {
-          // DICOMweb - test QIDO endpoint
-          const qidoPath = runtimeConfig.DICOMWEB_QIDO_PATH || config.dicomwebQidoPath;
+          const qidoPath = s.pacsQidoEndpoint || config.dicomwebQidoPath;
           testUrl = `${pacsUrl}${qidoPath}?limit=1`;
           testDescription = `QIDO-RS ${qidoPath}`;
         }
@@ -175,7 +151,7 @@ export async function configRoutes(fastify: FastifyInstance): Promise<void> {
         if (response.ok || response.status === 204) {
           return reply.send({
             success: true,
-            message: `Conexión exitosa (${latency}ms)`,
+            message: `Conexion exitosa (${latency}ms)`,
             endpoint: testDescription,
             status: response.status,
             pacsType,
@@ -205,9 +181,10 @@ export async function configRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.post('/api/config/test-stow', {
     preHandler: dashboardAuth,
     handler: async (request: FastifyRequest, reply: FastifyReply) => {
-      const pacsUrl = runtimeConfig.PACS_URL || config.pacsUrl;
-      const pacsType = runtimeConfig.PACS_TYPE || config.pacsType;
-      const stowPath = runtimeConfig.DICOMWEB_STOW_PATH || config.dicomwebStowPath;
+      const s = configStore.getAll();
+      const pacsUrl = s.pacsBaseUrl || config.pacsUrl;
+      const pacsType = s.pacsType || config.pacsType;
+      const stowPath = s.pacsStowEndpoint || config.dicomwebStowPath;
       
       try {
         const startTime = Date.now();
@@ -222,7 +199,6 @@ export async function configRoutes(fastify: FastifyInstance): Promise<void> {
           testDescription = `STOW-RS ${stowPath}`;
         }
         
-        // OPTIONS request to check if endpoint exists
         const response = await fetch(testUrl, {
           method: 'OPTIONS',
           headers: getAuthHeaders(),
@@ -231,7 +207,6 @@ export async function configRoutes(fastify: FastifyInstance): Promise<void> {
         
         const latency = Date.now() - startTime;
         
-        // STOW endpoint typically accepts OPTIONS or returns 405 Method Not Allowed
         if (response.ok || response.status === 405 || response.status === 204) {
           return reply.send({
             success: true,
@@ -267,11 +242,8 @@ export async function configRoutes(fastify: FastifyInstance): Promise<void> {
     handler: async (request: FastifyRequest, reply: FastifyReply) => {
       try {
         const startTime = Date.now();
-        
-        // Test worklist query with limit 5
         const result = await queryWorklist({ limit: 5 });
         const latency = Date.now() - startTime;
-        
         const worklistConfig = getWorklistConfig();
         
         if (result.success) {
@@ -283,7 +255,6 @@ export async function configRoutes(fastify: FastifyInstance): Promise<void> {
             totalAvailable: result.total || result.items.length,
             latency: `${latency}ms`,
             config: worklistConfig,
-            // Preview of items
             preview: result.items.slice(0, 3).map(item => ({
               accessionNumber: item.accessionNumber,
               patientName: item.patientName,
@@ -303,23 +274,20 @@ export async function configRoutes(fastify: FastifyInstance): Promise<void> {
         }
       } catch (error) {
         const msg = error instanceof Error ? error.message : 'Error desconocido';
-        return reply.send({
-          success: false,
-          error: msg
-        });
+        return reply.send({ success: false, error: msg });
       }
     }
   });
 
-
-  // POST /api/config/test-cecho - Test DICOM C-ECHO (ping nativo)
+  // POST /api/config/test-cecho - Test DICOM C-ECHO (ping nativo TCP)
   fastify.post('/api/config/test-cecho', {
     preHandler: dashboardAuth,
     handler: async (request: FastifyRequest, reply: FastifyReply) => {
-      const host = runtimeConfig.PACS_DICOM_HOST || config.pacsDicomHost;
-      const port = parseInt(runtimeConfig.PACS_DICOM_PORT || String(config.pacsDicomPort));
-      const calledAet = runtimeConfig.PACS_AE_TITLE || config.pacsAeTitle;
-      const callingAet = runtimeConfig.GATEWAY_AE_TITLE || config.gatewayAeTitle;
+      const s = configStore.getAll();
+      const host = s.pacsDicomHost || config.pacsDicomHost;
+      const port = s.pacsDicomPort || config.pacsDicomPort;
+      const calledAet = s.pacsAeTitle || config.pacsAeTitle;
+      const callingAet = s.gatewayAeTitle || config.gatewayAeTitle;
       
       if (!host) {
         return reply.send({ success: false, error: 'PACS Host/IP no configurado' });
@@ -330,7 +298,6 @@ export async function configRoutes(fastify: FastifyInstance): Promise<void> {
       
       try {
         const startTime = Date.now();
-        // TCP connection test (since we don't have a DICOM library, test TCP connectivity)
         const net = await import('net');
         const result = await new Promise<{success: boolean; error?: string}>((resolve) => {
           const socket = new net.default.Socket();
@@ -362,7 +329,7 @@ export async function configRoutes(fastify: FastifyInstance): Promise<void> {
               port,
               callingAet,
               calledAet,
-              note: 'Conexión TCP exitosa. Para C-ECHO completo se requiere librería DICOM (dcmtk/dimse).'
+              note: 'Conexion TCP exitosa. Para C-ECHO completo se requiere libreria DICOM (dcmtk/dimse).'
             }
           });
         } else {
@@ -379,19 +346,20 @@ export async function configRoutes(fastify: FastifyInstance): Promise<void> {
     }
   });
 
-  console.log('🔧 Rutas de configuración registradas: /config, /api/config/*');
+  console.log('\u{1F527} Rutas de configuracion registradas: /config, /api/config/*');
 }
 
 function getAuthHeaders(): Record<string, string> {
   const headers: Record<string, string> = { 'Accept': 'application/json' };
-  const authType = runtimeConfig.PACS_AUTH_TYPE || config.pacsAuthType;
-  const username = runtimeConfig.PACS_USERNAME || config.pacsUsername;
-  const password = runtimeConfig.PACS_PASSWORD || config.pacsPassword;
+  const s = configStore.getAll();
+  const authType = s.pacsAuthType || config.pacsAuthType;
+  const username = s.pacsUsername || config.pacsUsername;
+  const password = s.pacsPassword || config.pacsPassword;
   
   if (authType === 'basic' && username) {
     headers['Authorization'] = 'Basic ' + Buffer.from(`${username}:${password}`).toString('base64');
   } else if (authType === 'bearer') {
-    const token = runtimeConfig.PACS_TOKEN || config.pacsToken;
+    const token = s.pacsToken || config.pacsToken;
     if (token) headers['Authorization'] = `Bearer ${token}`;
   }
   
@@ -399,27 +367,31 @@ function getAuthHeaders(): Record<string, string> {
 }
 
 function generateConfigHtml(): string {
+  const s = configStore.getAll();
   const currentConfig = {
-    centroNombre: runtimeConfig.CENTRO_NOMBRE || config.centroNombre,
-    centroId: runtimeConfig.CENTRO_ID || config.centroId,
-    pacsType: runtimeConfig.PACS_TYPE || config.pacsType,
-    pacsUrl: runtimeConfig.PACS_URL || config.pacsUrl,
-    pacsAuthType: runtimeConfig.PACS_AUTH_TYPE || config.pacsAuthType,
-    pacsUsername: runtimeConfig.PACS_USERNAME || config.pacsUsername,
-    // DICOMweb
-    dicomwebStowPath: runtimeConfig.DICOMWEB_STOW_PATH || config.dicomwebStowPath,
-    dicomwebQidoPath: runtimeConfig.DICOMWEB_QIDO_PATH || config.dicomwebQidoPath,
-    dicomwebWadoPath: runtimeConfig.DICOMWEB_WADO_PATH || config.dicomwebWadoPath,
-    // Worklist
-    worklistUpsPath: runtimeConfig.WORKLIST_UPS_PATH || config.worklistUpsPath,
-    worklistQidoMwlPath: runtimeConfig.WORKLIST_QIDO_MWL_PATH || config.worklistQidoMwlPath,
-    worklistPreferUps: runtimeConfig.WORKLIST_PREFER_UPS !== 'false',
-    // DICOM Native
-    gatewayAeTitle: runtimeConfig.GATEWAY_AE_TITLE || config.gatewayAeTitle,
-    pacsDicomHost: runtimeConfig.PACS_DICOM_HOST || config.pacsDicomHost,
-    pacsDicomPort: parseInt(runtimeConfig.PACS_DICOM_PORT || String(config.pacsDicomPort)),
-    pacsAeTitle: runtimeConfig.PACS_AE_TITLE || config.pacsAeTitle,
-    gatewayDicomPort: parseInt(runtimeConfig.GATEWAY_DICOM_PORT || String(config.gatewayDicomPort)),
+    centroNombre: s.centroNombre || config.centroNombre,
+    centroId: s.centroId || config.centroId,
+    apiKey: s.apiKey || config.apiKey,
+    dashboardUser: s.dashboardUser || config.dashboardUser,
+    allowedOrigins: s.allowedOrigins || config.allowedOrigins.join(','),
+    pacsType: s.pacsType || config.pacsType,
+    pacsUrl: s.pacsBaseUrl || config.pacsBaseUrl,
+    pacsAuthType: s.pacsAuthType || config.pacsAuthType,
+    pacsUsername: s.pacsUsername || config.pacsUsername,
+    dicomwebStowPath: s.pacsStowEndpoint || config.dicomwebStowPath,
+    dicomwebQidoPath: s.pacsQidoEndpoint || config.dicomwebQidoPath,
+    dicomwebWadoPath: s.pacsWadoEndpoint || config.dicomwebWadoPath,
+    worklistUpsPath: s.worklistEndpoint || config.worklistUpsPath,
+    worklistQidoMwlPath: s.worklistMwlEndpoint || config.worklistQidoMwlPath,
+    worklistPreferUps: s.worklistPreferUps !== undefined ? s.worklistPreferUps : config.worklistPreferUps,
+    gatewayAeTitle: s.gatewayAeTitle || config.gatewayAeTitle,
+    pacsDicomHost: s.pacsDicomHost || config.pacsDicomHost,
+    pacsDicomPort: s.pacsDicomPort || config.pacsDicomPort,
+    pacsAeTitle: s.pacsAeTitle || config.pacsAeTitle,
+    gatewayDicomPort: s.gatewayDicomPort || config.gatewayDicomPort,
+    supabaseUrl: s.supabaseUrl || process.env.SUPABASE_URL || '',
+    supabaseAnonKey: s.supabaseAnonKey || process.env.SUPABASE_ANON_KEY || '',
+    supabaseCentroToken: s.supabaseCentroToken || process.env.SUPABASE_CENTRO_TOKEN || '',
   };
 
   return `<!DOCTYPE html>
@@ -427,7 +399,7 @@ function generateConfigHtml(): string {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Configuración - Andex Gateway</title>
+  <title>Configuracion - Andex Gateway</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f3f4f6; color: #1f2937; }
@@ -467,16 +439,17 @@ function generateConfigHtml(): string {
     .checkbox-group { display: flex; align-items: center; gap: 8px; }
     .checkbox-group input[type="checkbox"] { width: auto; }
     .section-title { font-size: 14px; font-weight: 600; color: #4f46e5; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 2px solid #e5e7eb; }
+    code { background: #f3f4f6; padding: 2px 6px; border-radius: 4px; font-size: 13px; }
   </style>
 </head>
 <body>
   <div class="header">
     <div style="display: flex; justify-content: space-between; align-items: center;">
       <div>
-        <h1>⚙️ Configuración PACS & Worklist</h1>
-        <p>Andex Gateway - ${currentConfig.centroNombre}</p>
+        <h1>\u2699\uFE0F Configuracion Gateway</h1>
+        <p>Andex Gateway - \${currentConfig.centroNombre}</p>
       </div>
-      <a href="/">← Volver al Dashboard</a>
+      <a href="/">\u2190 Volver al Dashboard</a>
     </div>
   </div>
   
@@ -486,19 +459,49 @@ function generateConfigHtml(): string {
     <!-- Centro -->
     <div class="card">
       <div class="card-header">
-        <h2>🏥 Centro Médico</h2>
+        <h2>\U0001F3E5 Centro Medico</h2>
       </div>
       <div class="card-body">
         <div class="form-row">
           <div class="form-group">
             <label>Nombre del Centro</label>
-            <input type="text" id="centroNombre" value="${currentConfig.centroNombre}">
+            <input type="text" id="centroNombre" value="\${currentConfig.centroNombre}">
           </div>
           <div class="form-group">
             <label>ID del Centro</label>
-            <input type="text" id="centroId" value="${currentConfig.centroId}">
-            <small>Identificador único (ej: HOSPTALC)</small>
+            <input type="text" id="centroId" value="\${currentConfig.centroId}">
+            <small>Identificador unico (ej: HOSPTALC)</small>
           </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Seguridad -->
+    <div class="card">
+      <div class="card-header">
+        <h2>\U0001F510 Seguridad & Acceso</h2>
+      </div>
+      <div class="card-body">
+        <div class="form-row-3">
+          <div class="form-group">
+            <label>API Key</label>
+            <input type="text" id="apiKey" value="\${currentConfig.apiKey}">
+            <small>Clave para autenticar requests desde la PWA</small>
+          </div>
+          <div class="form-group">
+            <label>Dashboard Usuario</label>
+            <input type="text" id="dashboardUser" value="\${currentConfig.dashboardUser}">
+          </div>
+          <div class="form-group">
+            <label>Dashboard Password</label>
+            <input type="password" id="dashboardPassword" placeholder="\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022">
+            <small>Dejar vacio para mantener actual</small>
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Origenes Permitidos (CORS)</label>
+          <input type="text" id="allowedOrigins" value="\${currentConfig.allowedOrigins}">
+          <small>URLs separadas por coma (ej: https://andexreports.app,http://localhost:3000)</small>
         </div>
       </div>
     </div>
@@ -506,47 +509,49 @@ function generateConfigHtml(): string {
     <!-- PACS -->
     <div class="card">
       <div class="card-header">
-        <h2>🖥️ Servidor PACS</h2>
+        <h2>\U0001F5A5\uFE0F Servidor PACS</h2>
       </div>
       <div class="card-body">
         <div class="form-row">
           <div class="form-group">
             <label>Tipo de PACS</label>
-            <select id="pacsType" onchange="toggleDicomwebFields()">
-              <option value="orthanc" ${currentConfig.pacsType === 'orthanc' ? 'selected' : ''}>Orthanc REST API</option>
-              <option value="dicomweb" ${currentConfig.pacsType === 'dicomweb' ? 'selected' : ''}>DICOMweb (STOW/QIDO/WADO)</option>
-              <option value="dicom-native" ${currentConfig.pacsType === 'dicom-native' ? 'selected' : ''}>DICOM Nativo (TCP - C-STORE/MWL)</option>
+            <select id="pacsType" onchange="togglePacsFields()">
+              <option value="orthanc" \${currentConfig.pacsType === 'orthanc' ? 'selected' : ''}>Orthanc REST API</option>
+              <option value="dicomweb" \${currentConfig.pacsType === 'dicomweb' ? 'selected' : ''}>DICOMweb (STOW/QIDO/WADO)</option>
+              <option value="dicom-native" \${currentConfig.pacsType === 'dicom-native' ? 'selected' : ''}>DICOM Nativo (TCP - C-STORE/MWL)</option>
             </select>
           </div>
-          <div class="form-group">
+          <div class="form-group" id="pacsUrlGroup">
             <label>URL del PACS</label>
-            <input type="text" id="pacsUrl" value="${currentConfig.pacsUrl}" placeholder="http://192.168.1.100:8042">
+            <input type="text" id="pacsUrl" value="\${currentConfig.pacsUrl}" placeholder="http://192.168.1.100:8042">
           </div>
         </div>
         
-        <div class="form-row">
-          <div class="form-group">
-            <label>Autenticación</label>
-            <select id="pacsAuthType">
-              <option value="none" ${currentConfig.pacsAuthType === 'none' ? 'selected' : ''}>Sin autenticación</option>
-              <option value="basic" ${currentConfig.pacsAuthType === 'basic' ? 'selected' : ''}>Basic Auth</option>
-              <option value="bearer" ${currentConfig.pacsAuthType === 'bearer' ? 'selected' : ''}>Bearer Token</option>
-            </select>
+        <div id="httpAuthSection">
+          <div class="form-row">
+            <div class="form-group">
+              <label>Autenticacion</label>
+              <select id="pacsAuthType">
+                <option value="none" \${currentConfig.pacsAuthType === 'none' ? 'selected' : ''}>Sin autenticacion</option>
+                <option value="basic" \${currentConfig.pacsAuthType === 'basic' ? 'selected' : ''}>Basic Auth</option>
+                <option value="bearer" \${currentConfig.pacsAuthType === 'bearer' ? 'selected' : ''}>Bearer Token</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Usuario</label>
+              <input type="text" id="pacsUsername" value="\${currentConfig.pacsUsername || ''}">
+            </div>
           </div>
+          
           <div class="form-group">
-            <label>Usuario</label>
-            <input type="text" id="pacsUsername" value="${currentConfig.pacsUsername || ''}">
+            <label>Password / Token</label>
+            <input type="password" id="pacsPassword" placeholder="\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022">
+            <small>Dejar vacio para mantener actual</small>
           </div>
-        </div>
-        
-        <div class="form-group">
-          <label>Contraseña / Token</label>
-          <input type="password" id="pacsPassword" placeholder="••••••••">
-          <small>Dejar vacío para mantener la actual</small>
         </div>
 
-        <div class="btn-group">
-          <button class="btn btn-outline" onclick="testPacs()">🔌 Test Conexión</button>
+        <div class="btn-group" id="testPacsGroup">
+          <button class="btn btn-outline" onclick="testPacs()">\U0001F50C Test Conexion</button>
         </div>
         <div id="testPacsResult"></div>
       </div>
@@ -555,17 +560,17 @@ function generateConfigHtml(): string {
     <!-- DICOMweb Paths -->
     <div class="card" id="dicomwebCard">
       <div class="card-header">
-        <h2>📡 Endpoints DICOMweb</h2>
+        <h2>\U0001F4E1 Endpoints DICOMweb</h2>
       </div>
       <div class="card-body">
         <p class="section-title">STOW-RS (Almacenamiento)</p>
         <div class="form-group">
           <label>STOW-RS Path</label>
-          <input type="text" id="dicomwebStowPath" value="${currentConfig.dicomwebStowPath}">
+          <input type="text" id="dicomwebStowPath" value="\${currentConfig.dicomwebStowPath}">
           <small>Endpoint para subir estudios DICOM (ej: /studies, /dcm4chee-arc/aets/DCM4CHEE/rs/studies)</small>
         </div>
         <div class="btn-group">
-          <button class="btn btn-amber" onclick="testStow()">📤 Test STOW</button>
+          <button class="btn btn-amber" onclick="testStow()">\U0001F4E4 Test STOW</button>
         </div>
         <div id="testStowResult"></div>
 
@@ -573,98 +578,120 @@ function generateConfigHtml(): string {
         <div class="form-row">
           <div class="form-group">
             <label>QIDO-RS Path</label>
-            <input type="text" id="dicomwebQidoPath" value="${currentConfig.dicomwebQidoPath}">
+            <input type="text" id="dicomwebQidoPath" value="\${currentConfig.dicomwebQidoPath}">
             <small>Endpoint para buscar estudios</small>
           </div>
           <div class="form-group">
             <label>WADO-RS Path</label>
-            <input type="text" id="dicomwebWadoPath" value="${currentConfig.dicomwebWadoPath}">
+            <input type="text" id="dicomwebWadoPath" value="\${currentConfig.dicomwebWadoPath}">
             <small>Endpoint para recuperar estudios</small>
           </div>
         </div>
       </div>
     </div>
 
-
     <!-- DICOM Native -->
     <div class="card" id="dicomNativeCard">
       <div class="card-header">
-        <h2>📡 DICOM Nativo (TCP)</h2>
+        <h2>\U0001F4E1 DICOM Nativo (TCP)</h2>
       </div>
       <div class="card-body">
-        <p class="section-title">🏥 Identidad del Gateway</p>
+        <p class="section-title">\U0001F3E5 Identidad del Gateway</p>
         <div class="form-row">
           <div class="form-group">
             <label>Gateway AE Title (Calling AET)</label>
-            <input type="text" id="gatewayAeTitle" value="${currentConfig.gatewayAeTitle}" placeholder="ANDEX_GW" maxlength="16">
-            <small>Nombre con que este Gateway se identifica ante el PACS (máx 16 caracteres, sin espacios)</small>
+            <input type="text" id="gatewayAeTitle" value="\${currentConfig.gatewayAeTitle}" placeholder="ANDEX_GW" maxlength="16">
+            <small>Nombre con que este Gateway se identifica ante el PACS (max 16 caracteres)</small>
           </div>
           <div class="form-group">
             <label>Gateway DICOM Port</label>
-            <input type="number" id="gatewayDicomPort" value="${currentConfig.gatewayDicomPort}" placeholder="11113">
-            <small>Puerto local para recibir imágenes via C-MOVE (opcional)</small>
+            <input type="number" id="gatewayDicomPort" value="\${currentConfig.gatewayDicomPort}" placeholder="11113">
+            <small>Puerto local para recibir imagenes via C-MOVE</small>
           </div>
         </div>
 
-        <p class="section-title" style="margin-top: 20px;">🖥️ PACS Remoto (Synapse / DCM4CHEE / etc)</p>
+        <p class="section-title" style="margin-top: 20px;">\U0001F5A5\uFE0F PACS Remoto (Synapse / DCM4CHEE / etc)</p>
         <div class="form-row-3">
           <div class="form-group">
             <label>PACS Host / IP</label>
-            <input type="text" id="pacsDicomHost" value="${currentConfig.pacsDicomHost}" placeholder="192.168.1.100">
+            <input type="text" id="pacsDicomHost" value="\${currentConfig.pacsDicomHost}" placeholder="192.168.1.100">
             <small>IP o hostname del servidor PACS</small>
           </div>
           <div class="form-group">
             <label>PACS DICOM Port</label>
-            <input type="number" id="pacsDicomPort" value="${currentConfig.pacsDicomPort}" placeholder="104">
+            <input type="number" id="pacsDicomPort" value="\${currentConfig.pacsDicomPort}" placeholder="104">
             <small>Puerto TCP DICOM (104 o 11112)</small>
           </div>
           <div class="form-group">
             <label>PACS AE Title (Called AET)</label>
-            <input type="text" id="pacsAeTitle" value="${currentConfig.pacsAeTitle}" placeholder="SYNAPSE" maxlength="16">
+            <input type="text" id="pacsAeTitle" value="\${currentConfig.pacsAeTitle}" placeholder="SYNAPSE" maxlength="16">
             <small>AE Title del PACS destino</small>
           </div>
         </div>
 
         <div class="alert alert-info" style="margin-top: 12px;">
-          <strong>⚠️ Importante:</strong> El PACS remoto debe tener configurado el AE Title del Gateway (<strong>${currentConfig.gatewayAeTitle || 'ANDEX_GW'}</strong>) como nodo permitido para enviar/recibir estudios. Solicita al administrador del PACS que agregue esta entrada.
+          <strong>\u26A0\uFE0F Importante:</strong> El PACS remoto debe tener configurado el AE Title del Gateway (<strong>\${currentConfig.gatewayAeTitle || 'ANDEX_GW'}</strong>) como nodo permitido.
         </div>
 
         <div class="btn-group">
-          <button class="btn btn-outline" onclick="testCEcho()">🔌 Test Conexión TCP</button>
+          <button class="btn btn-outline" onclick="testCEcho()">\U0001F50C Test Conexion TCP</button>
         </div>
         <div id="testCEchoResult"></div>
+      </div>
+    </div>
+
+    <!-- Supabase -->
+    <div class="card">
+      <div class="card-header">
+        <h2>\u2601\uFE0F Supabase (Backend PWA)</h2>
+      </div>
+      <div class="card-body">
+        <div class="form-group">
+          <label>Supabase URL</label>
+          <input type="text" id="supabaseUrl" value="\${currentConfig.supabaseUrl}" placeholder="https://xxxxx.supabase.co">
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Anon Key</label>
+            <input type="text" id="supabaseAnonKey" value="\${currentConfig.supabaseAnonKey}" placeholder="eyJ...">
+          </div>
+          <div class="form-group">
+            <label>Centro Token (JWT)</label>
+            <input type="text" id="supabaseCentroToken" value="\${currentConfig.supabaseCentroToken}" placeholder="eyJ...">
+            <small>Token scoped al centro para RLS</small>
+          </div>
+        </div>
       </div>
     </div>
 
     <!-- Worklist -->
     <div class="card">
       <div class="card-header">
-        <h2>📋 Worklist (MWL)</h2>
+        <h2>\U0001F4CB Worklist (MWL)</h2>
       </div>
       <div class="card-body">
         <div class="form-row">
           <div class="form-group">
             <label>UPS-RS Path (Workitems)</label>
-            <input type="text" id="worklistUpsPath" value="${currentConfig.worklistUpsPath}">
-            <small>Endpoint UPS-RS para consultar procedimientos (ej: /workitems)</small>
+            <input type="text" id="worklistUpsPath" value="\${currentConfig.worklistUpsPath}">
+            <small>Endpoint UPS-RS para consultar procedimientos</small>
           </div>
           <div class="form-group">
             <label>QIDO-RS MWL Path</label>
-            <input type="text" id="worklistQidoMwlPath" value="${currentConfig.worklistQidoMwlPath}">
-            <small>Endpoint alternativo para MWL (ej: /mwlitems)</small>
+            <input type="text" id="worklistQidoMwlPath" value="\${currentConfig.worklistQidoMwlPath}">
+            <small>Endpoint alternativo para MWL</small>
           </div>
         </div>
         
         <div class="form-group">
           <div class="checkbox-group">
-            <input type="checkbox" id="worklistPreferUps" ${currentConfig.worklistPreferUps ? 'checked' : ''}>
+            <input type="checkbox" id="worklistPreferUps" \${currentConfig.worklistPreferUps ? 'checked' : ''}>
             <label for="worklistPreferUps" style="margin-bottom: 0;">Preferir UPS-RS sobre QIDO-RS MWL</label>
           </div>
-          <small>Si está activo, se usará UPS-RS primero. Si falla, se intentará QIDO-RS MWL.</small>
         </div>
 
         <div class="btn-group">
-          <button class="btn btn-success" onclick="testWorklist()">📋 Test Worklist</button>
+          <button class="btn btn-success" onclick="testWorklist()">\U0001F4CB Test Worklist</button>
         </div>
         <div id="testWorklistResult"></div>
       </div>
@@ -672,8 +699,10 @@ function generateConfigHtml(): string {
 
     <!-- Actions -->
     <div class="btn-group">
-      <button class="btn btn-primary" onclick="saveConfig()">💾 Guardar Configuración</button>
-      <button class="btn btn-success" onclick="saveToEnv()">📝 Guardar en .env</button>
+      <button class="btn btn-primary" onclick="saveConfig()">\U0001F4BE Guardar Configuracion</button>
+    </div>
+    <div class="alert alert-info" style="margin-top: 12px;">
+      \U0001F4A1 La configuracion se guarda en <code>data/gateway-config.json</code>. Reinicie el Gateway para aplicar cambios de seguridad.
     </div>
   </div>
 
@@ -687,20 +716,26 @@ function generateConfigHtml(): string {
       setTimeout(function() { status.style.display = 'none'; }, 5000);
     }
 
-    function toggleDicomwebFields() {
+    function togglePacsFields() {
       var pacsType = document.getElementById('pacsType').value;
-      document.getElementById('dicomwebCard').style.display = (pacsType === 'dicomweb' || pacsType === 'orthanc') ? 'block' : 'none';
-      document.getElementById('dicomNativeCard').style.display = pacsType === 'dicom-native' ? 'block' : 'none';
-      // Show/hide URL field based on type
-      var urlGroup = document.getElementById('pacsUrl').closest('.form-group');
-      if (urlGroup) urlGroup.style.display = pacsType === 'dicom-native' ? 'none' : '';
+      var isNative = pacsType === 'dicom-native';
+      var isHttp = pacsType === 'orthanc' || pacsType === 'dicomweb';
+      
+      document.getElementById('dicomwebCard').style.display = isHttp ? 'block' : 'none';
+      document.getElementById('dicomNativeCard').style.display = isNative ? 'block' : 'none';
+      document.getElementById('pacsUrlGroup').style.display = isNative ? 'none' : '';
+      document.getElementById('httpAuthSection').style.display = isNative ? 'none' : '';
+      document.getElementById('testPacsGroup').style.display = isNative ? 'none' : '';
     }
-    toggleDicomwebFields();
+    togglePacsFields();
 
     async function saveConfig() {
       var data = {
         centroNombre: document.getElementById('centroNombre').value,
         centroId: document.getElementById('centroId').value,
+        apiKey: document.getElementById('apiKey').value,
+        dashboardUser: document.getElementById('dashboardUser').value,
+        allowedOrigins: document.getElementById('allowedOrigins').value,
         pacsType: document.getElementById('pacsType').value,
         pacsUrl: document.getElementById('pacsUrl').value,
         pacsAuthType: document.getElementById('pacsAuthType').value,
@@ -708,19 +743,23 @@ function generateConfigHtml(): string {
         dicomwebStowPath: document.getElementById('dicomwebStowPath').value,
         dicomwebQidoPath: document.getElementById('dicomwebQidoPath').value,
         dicomwebWadoPath: document.getElementById('dicomwebWadoPath').value,
-        worklistUpsPath: document.getElementById('worklistUpsPath').value,
-        worklistQidoMwlPath: document.getElementById('worklistQidoMwlPath').value,
-        worklistPreferUps: document.getElementById('worklistPreferUps').checked,
-        // DICOM Native
         gatewayAeTitle: document.getElementById('gatewayAeTitle').value,
         pacsDicomHost: document.getElementById('pacsDicomHost').value,
         pacsDicomPort: parseInt(document.getElementById('pacsDicomPort').value) || 104,
         pacsAeTitle: document.getElementById('pacsAeTitle').value,
         gatewayDicomPort: parseInt(document.getElementById('gatewayDicomPort').value) || 11113,
+        worklistUpsPath: document.getElementById('worklistUpsPath').value,
+        worklistQidoMwlPath: document.getElementById('worklistQidoMwlPath').value,
+        worklistPreferUps: document.getElementById('worklistPreferUps').checked,
+        supabaseUrl: document.getElementById('supabaseUrl').value,
+        supabaseAnonKey: document.getElementById('supabaseAnonKey').value,
+        supabaseCentroToken: document.getElementById('supabaseCentroToken').value,
       };
       
       var password = document.getElementById('pacsPassword').value;
       if (password) data.pacsPassword = password;
+      var dashPassword = document.getElementById('dashboardPassword').value;
+      if (dashPassword) data.dashboardPassword = dashPassword;
       
       try {
         var resp = await fetch('/api/config', {
@@ -730,24 +769,7 @@ function generateConfigHtml(): string {
           credentials: 'include'
         });
         var result = await resp.json();
-        showStatus(result.message || 'Configuración guardada', result.success ? 'success' : 'error');
-      } catch (e) {
-        showStatus('Error: ' + e.message, 'error');
-      }
-    }
-
-    async function saveToEnv() {
-      if (!confirm('¿Guardar configuración en .env? Deberá reiniciar el Gateway.')) return;
-      
-      await saveConfig();
-      
-      try {
-        var resp = await fetch('/api/config/save', {
-          method: 'POST',
-          credentials: 'include'
-        });
-        var result = await resp.json();
-        showStatus(result.message || 'Guardado en .env', result.success ? 'success' : 'error');
+        showStatus(result.message || 'Configuracion guardada', result.success ? 'success' : 'error');
       } catch (e) {
         showStatus('Error: ' + e.message, 'error');
       }
@@ -755,78 +777,90 @@ function generateConfigHtml(): string {
 
     async function testPacs() {
       var resultDiv = document.getElementById('testPacsResult');
-      resultDiv.innerHTML = '<div class="test-result">⏳ Probando conexión PACS...</div>';
-      
+      resultDiv.innerHTML = '<div class="test-result">\u23F3 Probando conexion PACS...</div>';
       try {
         await saveConfig();
-        
-        var resp = await fetch('/api/config/test-pacs', {
-          method: 'POST',
-          credentials: 'include'
-        });
+        var resp = await fetch('/api/config/test-pacs', { method: 'POST', credentials: 'include' });
         var result = await resp.json();
-        
         if (result.success) {
-          resultDiv.innerHTML = '<div class="test-result" style="background:#dcfce7;">✅ ' + result.message + '\\nEndpoint: ' + result.endpoint + '\\nURL: ' + result.pacsUrl + '</div>';
+          resultDiv.innerHTML = '<div class="test-result" style="background:#dcfce7;">\u2705 ' + result.message + '\\nEndpoint: ' + result.endpoint + '\\nURL: ' + result.pacsUrl + '</div>';
         } else {
-          resultDiv.innerHTML = '<div class="test-result" style="background:#fee2e2;">❌ ' + result.error + '\\nURL: ' + result.pacsUrl + '</div>';
+          resultDiv.innerHTML = '<div class="test-result" style="background:#fee2e2;">\u274C ' + result.error + '\\nURL: ' + result.pacsUrl + '</div>';
         }
       } catch (e) {
-        resultDiv.innerHTML = '<div class="test-result" style="background:#fee2e2;">❌ ' + e.message + '</div>';
+        resultDiv.innerHTML = '<div class="test-result" style="background:#fee2e2;">\u274C ' + e.message + '</div>';
       }
     }
 
     async function testStow() {
       var resultDiv = document.getElementById('testStowResult');
-      resultDiv.innerHTML = '<div class="test-result">⏳ Probando endpoint STOW...</div>';
-      
+      resultDiv.innerHTML = '<div class="test-result">\u23F3 Probando endpoint STOW...</div>';
       try {
         await saveConfig();
-        
-        var resp = await fetch('/api/config/test-stow', {
-          method: 'POST',
-          credentials: 'include'
-        });
+        var resp = await fetch('/api/config/test-stow', { method: 'POST', credentials: 'include' });
         var result = await resp.json();
-        
         if (result.success) {
-          resultDiv.innerHTML = '<div class="test-result" style="background:#dcfce7;">✅ ' + result.message + '\\nEndpoint: ' + result.endpoint + '\\nURL: ' + result.stowUrl + '</div>';
+          resultDiv.innerHTML = '<div class="test-result" style="background:#dcfce7;">\u2705 ' + result.message + '\\nEndpoint: ' + result.endpoint + '\\nURL: ' + result.stowUrl + '</div>';
         } else {
-          resultDiv.innerHTML = '<div class="test-result" style="background:#fee2e2;">❌ ' + result.error + '\\nURL: ' + result.stowUrl + '</div>';
+          resultDiv.innerHTML = '<div class="test-result" style="background:#fee2e2;">\u274C ' + result.error + '\\nURL: ' + result.stowUrl + '</div>';
         }
       } catch (e) {
-        resultDiv.innerHTML = '<div class="test-result" style="background:#fee2e2;">❌ ' + e.message + '</div>';
+        resultDiv.innerHTML = '<div class="test-result" style="background:#fee2e2;">\u274C ' + e.message + '</div>';
       }
     }
 
     async function testWorklist() {
       var resultDiv = document.getElementById('testWorklistResult');
-      resultDiv.innerHTML = '<div class="test-result">⏳ Probando Worklist...</div>';
-      
+      resultDiv.innerHTML = '<div class="test-result">\u23F3 Probando Worklist...</div>';
       try {
         await saveConfig();
-        
-        var resp = await fetch('/api/config/test-worklist', {
-          method: 'POST',
-          credentials: 'include'
-        });
+        var resp = await fetch('/api/config/test-worklist', { method: 'POST', credentials: 'include' });
         var result = await resp.json();
-        
         if (result.success) {
           var preview = '';
           if (result.preview && result.preview.length > 0) {
             preview = '\\n\\nPrimeros items:\\n' + result.preview.map(function(item) {
-              return '• ' + (item.patientName || 'Sin nombre') + ' - ' + (item.accessionNumber || 'Sin accession') + ' - ' + (item.description || '');
+              return '\u2022 ' + (item.patientName || 'Sin nombre') + ' - ' + (item.accessionNumber || 'Sin accession') + ' - ' + (item.description || '');
             }).join('\\n');
           }
-          resultDiv.innerHTML = '<div class="test-result" style="background:#dcfce7;">✅ ' + result.message + '\\nFuente: ' + result.source + '\\nLatencia: ' + result.latency + preview + '</div>';
+          resultDiv.innerHTML = '<div class="test-result" style="background:#dcfce7;">\u2705 ' + result.message + '\\nFuente: ' + result.source + '\\nLatencia: ' + result.latency + preview + '</div>';
         } else {
-          resultDiv.innerHTML = '<div class="test-result" style="background:#fee2e2;">❌ ' + result.error + '\\nFuente: ' + (result.source || 'desconocida') + '</div>';
+          resultDiv.innerHTML = '<div class="test-result" style="background:#fee2e2;">\u274C ' + result.error + '\\nFuente: ' + (result.source || 'desconocida') + '</div>';
         }
       } catch (e) {
-        resultDiv.innerHTML = '<div class="test-result" style="background:#fee2e2;">❌ ' + e.message + '</div>';
+        resultDiv.innerHTML = '<div class="test-result" style="background:#fee2e2;">\u274C ' + e.message + '</div>';
       }
     }
+
+    async function testCEcho() {
+      var resultDiv = document.getElementById('testCEchoResult');
+      resultDiv.innerHTML = '<div class="test-result">\u23F3 Probando conexion TCP al PACS...</div>';
+      try {
+        await saveConfig();
+        var resp = await fetch('/api/config/test-cecho', { method: 'POST', credentials: 'include' });
+        var result = await resp.json();
+        if (result.success) {
+          var details = result.details || {};
+          resultDiv.innerHTML = '<div class="test-result" style="background:#dcfce7;">\u2705 ' + result.message + 
+            '\\n\\nDetalles:' +
+            '\\n  Host: ' + (details.host || '-') + 
+            '\\n  Port: ' + (details.port || '-') + 
+            '\\n  Calling AET: ' + (details.callingAet || '-') + 
+            '\\n  Called AET: ' + (details.calledAet || '-') + 
+            (details.note ? '\\n\\n\U0001F4A1 ' + details.note : '') +
+            '</div>';
+        } else {
+          resultDiv.innerHTML = '<div class="test-result" style="background:#fee2e2;">\u274C ' + result.error + '</div>';
+        }
+      } catch (e) {
+        resultDiv.innerHTML = '<div class="test-result" style="background:#fee2e2;">\u274C ' + e.message + '</div>';
+      }
+    }
+
+    // Auto-refresh status every 30 seconds
+    setInterval(function() {
+      fetch('/api/config', { credentials: 'include' }).catch(function() {});
+    }, 30000);
   </script>
 </body>
 </html>`;

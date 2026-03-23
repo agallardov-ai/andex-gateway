@@ -7,3 +7,4 @@ data/
 
 # TLS certificates (mkcert)
 certs/
+data/gateway-config.json
