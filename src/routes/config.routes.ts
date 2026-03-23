@@ -1102,21 +1102,21 @@ function generateConfigHtml(): string {
         if (result.success) {
           resultDiv.innerHTML = '<div class="test-result" style="background:#dcfce7;">'
             + result.message
-            + '\nEndpoint: ' + result.endpoint
-            + '\nURL: ' + result.pacsUrl
-            + '\nTipo: ' + (result.pacsTypeLabel || result.pacsType)
+            + '\\nEndpoint: ' + result.endpoint
+            + '\\nURL: ' + result.pacsUrl
+            + '\\nTipo: ' + (result.pacsTypeLabel || result.pacsType)
             + '</div>';
         } else {
-          var hint = result.hint ? '\n\n\uD83D\uDCA1 ' + result.hint : '';
+          var hint = result.hint ? '\\n\\n\uD83D\uDCA1 ' + result.hint : '';
           resultDiv.innerHTML = '<div class="test-result" style="background:#fee2e2;">\u274C ' + result.error
-            + (result.endpoint ? '\nEndpoint: ' + result.endpoint : '')
-            + (result.pacsUrl ? '\nURL: ' + result.pacsUrl : '')
-            + '\nTipo configurado: ' + (result.pacsTypeLabel || result.pacsType || 'desconocido')
+            + (result.endpoint ? '\\nEndpoint: ' + result.endpoint : '')
+            + (result.pacsUrl ? '\\nURL: ' + result.pacsUrl : '')
+            + '\\nTipo configurado: ' + (result.pacsTypeLabel || result.pacsType || 'desconocido')
             + hint
             + '</div>';
         }
       } catch (e) {
-        resultDiv.innerHTML = '<div class="test-result" style="background:#fee2e2;">\u274C Error de red: ' + e.message + '\n\n\uD83D\uDCA1 No se pudo conectar al Gateway. Verifique que est\u00e9 corriendo.</div>';
+        resultDiv.innerHTML = '<div class="test-result" style="background:#fee2e2;">\u274C Error de red: ' + e.message + '\\n\\n\uD83D\uDCA1 No se pudo conectar al Gateway. Verifique que est\u00e9 corriendo.</div>';
       }
     }
 
@@ -1130,16 +1130,16 @@ function generateConfigHtml(): string {
         if (result.success) {
           resultDiv.innerHTML = '<div class="test-result" style="background:#dcfce7;">'
             + result.message
-            + '\nEndpoint: ' + result.endpoint
-            + '\nURL: ' + result.stowUrl
-            + '\nTipo: ' + (result.pacsTypeLabel || result.pacsType)
+            + '\\nEndpoint: ' + result.endpoint
+            + '\\nURL: ' + result.stowUrl
+            + '\\nTipo: ' + (result.pacsTypeLabel || result.pacsType)
             + '</div>';
         } else {
-          var hint = result.hint ? '\n\n\uD83D\uDCA1 ' + result.hint : '';
+          var hint = result.hint ? '\\n\\n\uD83D\uDCA1 ' + result.hint : '';
           resultDiv.innerHTML = '<div class="test-result" style="background:#fee2e2;">\u274C ' + result.error
-            + (result.endpoint ? '\nEndpoint: ' + result.endpoint : '')
-            + (result.stowUrl ? '\nURL: ' + result.stowUrl : '')
-            + '\nTipo configurado: ' + (result.pacsTypeLabel || result.pacsType || 'desconocido')
+            + (result.endpoint ? '\\nEndpoint: ' + result.endpoint : '')
+            + (result.stowUrl ? '\\nURL: ' + result.stowUrl : '')
+            + '\\nTipo configurado: ' + (result.pacsTypeLabel || result.pacsType || 'desconocido')
             + hint
             + '</div>';
         }
