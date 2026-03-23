@@ -752,7 +752,7 @@ function generateConfigHtml(): string {
     <div style="display: flex; justify-content: space-between; align-items: center;">
       <div>
         <h1>\u2699\uFE0F Configuracion Gateway</h1>
-        <p>Andex Gateway - \${currentConfig.centroNombre}</p>
+        <p>Andex Gateway - ${currentConfig.centroNombre}</p>
       </div>
       <a href="/">\u2190 Volver al Dashboard</a>
     </div>
@@ -793,16 +793,16 @@ function generateConfigHtml(): string {
         <div class="form-row">
           <div class="form-group">
             <label>Nombre del Centro</label>
-            <input type="text" id="centroNombre" value="\${currentConfig.centroNombre}">
+            <input type="text" id="centroNombre" value="${currentConfig.centroNombre}">
           </div>
           <div class="form-group">
             <label>ID del Centro</label>
-            <input type="text" id="centroId" value="\${currentConfig.centroId}">
+            <input type="text" id="centroId" value="${currentConfig.centroId}">
             <small>Identificador unico (ej: HOSPTALC)</small>
           </div>
           <div class="form-group">
             <label>AE Title del Gateway</label>
-            <input type="text" id="gatewayAeTitle" value="\${currentConfig.gatewayAeTitle}" placeholder="ANDEX_1" maxlength="16" style="text-transform:uppercase;">
+            <input type="text" id="gatewayAeTitle" value="${currentConfig.gatewayAeTitle}" placeholder="ANDEX_1" maxlength="16" style="text-transform:uppercase;">
             <small>Nombre DICOM del Gateway en la red (aplica a DICOMweb y DICOM Nativo)</small>
           </div>
         </div>
@@ -818,12 +818,12 @@ function generateConfigHtml(): string {
         <div class="form-row-3">
           <div class="form-group">
             <label>API Key</label>
-            <input type="text" id="apiKey" value="\${currentConfig.apiKey}">
+            <input type="text" id="apiKey" value="${currentConfig.apiKey}">
             <small>Clave para autenticar requests desde la PWA</small>
           </div>
           <div class="form-group">
             <label>Dashboard Usuario</label>
-            <input type="text" id="dashboardUser" value="\${currentConfig.dashboardUser}">
+            <input type="text" id="dashboardUser" value="${currentConfig.dashboardUser}">
           </div>
           <div class="form-group">
             <label>Dashboard Password</label>
@@ -833,138 +833,127 @@ function generateConfigHtml(): string {
         </div>
         <div class="form-group">
           <label>Origenes Permitidos (CORS)</label>
-          <input type="text" id="allowedOrigins" value="\${currentConfig.allowedOrigins}">
+          <input type="text" id="allowedOrigins" value="${currentConfig.allowedOrigins}">
           <small>URLs separadas por coma (ej: https://andexreports.app,http://localhost:3000)</small>
         </div>
       </div>
     </div>
 
-    <!-- PACS -->
+    <!-- PACS - Card unificada -->
     <div class="card">
       <div class="card-header">
         <h2>🖥️ Servidor PACS</h2>
       </div>
       <div class="card-body">
-        <div class="form-row">
-          <div class="form-group">
-            <label>Tipo de PACS</label>
-            <select id="pacsType" onchange="togglePacsFields()">
-              <option value="orthanc" \${currentConfig.pacsType === 'orthanc' ? 'selected' : ''}>Orthanc REST API</option>
-              <option value="dicomweb" \${currentConfig.pacsType === 'dicomweb' ? 'selected' : ''}>DICOMweb (STOW/QIDO/WADO)</option>
-              <option value="dicom-native" \${currentConfig.pacsType === 'dicom-native' ? 'selected' : ''}>DICOM Nativo (TCP - C-STORE/MWL)</option>
-            </select>
-          </div>
-          <div class="form-group" id="pacsUrlGroup">
-            <label>URL del PACS</label>
-            <input type="text" id="pacsUrl" value="\${currentConfig.pacsUrl}" placeholder="http://192.168.1.100:8042">
-          </div>
+        <!-- Selector de tipo -->
+        <div class="form-group" style="margin-bottom: 20px;">
+          <label>Tipo de Conexion PACS</label>
+          <select id="pacsType" onchange="togglePacsFields()" style="font-size: 15px; font-weight: 500; padding: 12px;">
+            <option value="orthanc" ${currentConfig.pacsType === 'orthanc' ? 'selected' : ''}>🟢 Orthanc REST API</option>
+            <option value="dicomweb" ${currentConfig.pacsType === 'dicomweb' ? 'selected' : ''}>🔵 DICOMweb (STOW/QIDO/WADO)</option>
+            <option value="dicom-native" ${currentConfig.pacsType === 'dicom-native' ? 'selected' : ''}>🟠 DICOM Nativo (TCP - C-STORE/MWL)</option>
+          </select>
+          <small id="pacsTypeHint"></small>
         </div>
-        
-        <div id="httpAuthSection">
+
+        <!-- Descripcion del tipo seleccionado -->
+        <div id="pacsTypeDesc" class="alert alert-info" style="margin-bottom: 20px;"></div>
+
+        <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 20px 0;">
+
+        <!-- ========== SECCION HTTP (Orthanc + DICOMweb) ========== -->
+        <div id="httpSection">
           <div class="form-row">
+            <div class="form-group">
+              <label>URL del PACS</label>
+              <input type="text" id="pacsUrl" value="${currentConfig.pacsUrl}" placeholder="http://192.168.1.100:8042">
+              <small id="pacsUrlHint">URL base del servidor PACS</small>
+            </div>
             <div class="form-group">
               <label>Autenticacion</label>
               <select id="pacsAuthType">
-                <option value="none" \${currentConfig.pacsAuthType === 'none' ? 'selected' : ''}>Sin autenticacion</option>
-                <option value="basic" \${currentConfig.pacsAuthType === 'basic' ? 'selected' : ''}>Basic Auth</option>
-                <option value="bearer" \${currentConfig.pacsAuthType === 'bearer' ? 'selected' : ''}>Bearer Token</option>
+                <option value="none" ${currentConfig.pacsAuthType === 'none' ? 'selected' : ''}>Sin autenticacion</option>
+                <option value="basic" ${currentConfig.pacsAuthType === 'basic' ? 'selected' : ''}>Basic Auth</option>
+                <option value="bearer" ${currentConfig.pacsAuthType === 'bearer' ? 'selected' : ''}>Bearer Token</option>
               </select>
             </div>
+          </div>
+          <div class="form-row">
             <div class="form-group">
               <label>Usuario</label>
-              <input type="text" id="pacsUsername" value="\${currentConfig.pacsUsername || ''}">
+              <input type="text" id="pacsUsername" value="${currentConfig.pacsUsername || ''}">
+            </div>
+            <div class="form-group">
+              <label>Password / Token</label>
+              <input type="password" id="pacsPassword" placeholder="\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022">
+              <small>Dejar vacio para mantener actual</small>
             </div>
           </div>
-          
-          <div class="form-group">
-            <label>Password / Token</label>
-            <input type="password" id="pacsPassword" placeholder="\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022">
-            <small>Dejar vacio para mantener actual</small>
+
+          <!-- Sub-seccion: Endpoints DICOMweb (solo para dicomweb) -->
+          <div id="dicomwebEndpoints" style="margin-top: 16px;">
+            <p class="section-title">📡 Endpoints DICOMweb</p>
+            <div class="form-group">
+              <label>STOW-RS Path (Almacenamiento)</label>
+              <input type="text" id="dicomwebStowPath" value="${currentConfig.dicomwebStowPath}">
+              <small>Endpoint para subir estudios (ej: /studies, /dcm4chee-arc/aets/DCM4CHEE/rs/studies)</small>
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label>QIDO-RS Path (Consulta)</label>
+                <input type="text" id="dicomwebQidoPath" value="${currentConfig.dicomwebQidoPath}">
+                <small>Endpoint para buscar estudios</small>
+              </div>
+              <div class="form-group">
+                <label>WADO-RS Path (Recuperar)</label>
+                <input type="text" id="dicomwebWadoPath" value="${currentConfig.dicomwebWadoPath}">
+                <small>Endpoint para recuperar estudios</small>
+              </div>
+            </div>
           </div>
-        </div>
 
-        <div class="btn-group" id="testPacsGroup">
-          <button class="btn btn-outline" onclick="testPacs()">🔌 Test Conexion</button>
-        </div>
-        <div id="testPacsResult"></div>
-      </div>
-    </div>
-
-    <!-- DICOMweb Paths -->
-    <div class="card" id="dicomwebCard">
-      <div class="card-header">
-        <h2>📡 Endpoints DICOMweb</h2>
-      </div>
-      <div class="card-body">
-        <p class="section-title">STOW-RS (Almacenamiento)</p>
-        <div class="form-group">
-          <label>STOW-RS Path</label>
-          <input type="text" id="dicomwebStowPath" value="\${currentConfig.dicomwebStowPath}">
-          <small>Endpoint para subir estudios DICOM (ej: /studies, /dcm4chee-arc/aets/DCM4CHEE/rs/studies)</small>
-        </div>
-        <div class="btn-group">
-          <button class="btn btn-amber" onclick="testStow()">📤 Test STOW</button>
-        </div>
-        <div id="testStowResult"></div>
-
-        <p class="section-title" style="margin-top: 20px;">QIDO-RS / WADO-RS (Consulta)</p>
-        <div class="form-row">
-          <div class="form-group">
-            <label>QIDO-RS Path</label>
-            <input type="text" id="dicomwebQidoPath" value="\${currentConfig.dicomwebQidoPath}">
-            <small>Endpoint para buscar estudios</small>
+          <div class="btn-group">
+            <button class="btn btn-outline" onclick="testPacs()">🔌 Test Conexion HTTP</button>
+            <button class="btn btn-amber" onclick="testStow()" id="btnTestStow">📤 Test STOW</button>
           </div>
-          <div class="form-group">
-            <label>WADO-RS Path</label>
-            <input type="text" id="dicomwebWadoPath" value="\${currentConfig.dicomwebWadoPath}">
-            <small>Endpoint para recuperar estudios</small>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- DICOM Native -->
-    <div class="card" id="dicomNativeCard">
-      <div class="card-header">
-        <h2>📡 DICOM Nativo (TCP)</h2>
-      </div>
-      <div class="card-body">
-        <div class="form-row">
-          <div class="form-group">
-            <label>Gateway DICOM Port</label>
-            <input type="number" id="gatewayDicomPort" value="\${currentConfig.gatewayDicomPort}" placeholder="11113">
-            <small>Puerto donde el Gateway escucha conexiones DICOM (C-MOVE)</small>
-          </div>
+          <div id="testPacsResult"></div>
+          <div id="testStowResult"></div>
         </div>
 
-
-        <p class="section-title" style="margin-top: 20px;">🖥️ PACS Remoto (Synapse / DCM4CHEE / etc)</p>
-        <div class="form-row-3">
-          <div class="form-group">
-            <label>PACS Host / IP</label>
-            <input type="text" id="pacsDicomHost" value="\${currentConfig.pacsDicomHost}" placeholder="192.168.1.100">
-            <small>IP o hostname del servidor PACS</small>
+        <!-- ========== SECCION DICOM NATIVO (TCP) ========== -->
+        <div id="nativeSection">
+          <div class="form-row-3">
+            <div class="form-group">
+              <label>PACS Host / IP</label>
+              <input type="text" id="pacsDicomHost" value="${currentConfig.pacsDicomHost}" placeholder="192.168.1.100">
+              <small>IP o hostname del servidor PACS</small>
+            </div>
+            <div class="form-group">
+              <label>PACS DICOM Port</label>
+              <input type="number" id="pacsDicomPort" value="${currentConfig.pacsDicomPort}" placeholder="104">
+              <small>Puerto TCP DICOM (104 o 11112)</small>
+            </div>
+            <div class="form-group">
+              <label>PACS AE Title (Called AET)</label>
+              <input type="text" id="pacsAeTitle" value="${currentConfig.pacsAeTitle}" placeholder="SYNAPSE" maxlength="16" style="text-transform:uppercase;">
+              <small>AE Title del PACS destino</small>
+            </div>
           </div>
           <div class="form-group">
-            <label>PACS DICOM Port</label>
-            <input type="number" id="pacsDicomPort" value="\${currentConfig.pacsDicomPort}" placeholder="104">
-            <small>Puerto TCP DICOM (104 o 11112)</small>
+            <label>Gateway DICOM Port (Receptor)</label>
+            <input type="number" id="gatewayDicomPort" value="${currentConfig.gatewayDicomPort}" placeholder="11113" style="max-width: 200px;">
+            <small>Puerto donde el Gateway escucha conexiones DICOM entrantes (C-MOVE)</small>
           </div>
-          <div class="form-group">
-            <label>PACS AE Title (Called AET)</label>
-            <input type="text" id="pacsAeTitle" value="\${currentConfig.pacsAeTitle}" placeholder="SYNAPSE" maxlength="16">
-            <small>AE Title del PACS destino</small>
+
+          <div class="alert alert-info" style="margin-top: 12px;">
+            <strong>\u26A0\uFE0F Importante:</strong> El PACS remoto debe tener configurado el AE Title del Gateway (<strong>${currentConfig.gatewayAeTitle || 'ANDEX_1'}</strong>) como nodo permitido.
           </div>
-        </div>
 
-        <div class="alert alert-info" style="margin-top: 12px;">
-          <strong>\u26A0\uFE0F Importante:</strong> El PACS remoto debe tener configurado el AE Title del Gateway (<strong>\${currentConfig.gatewayAeTitle || 'ANDEX_1'}</strong>) como nodo permitido.
+          <div class="btn-group">
+            <button class="btn btn-outline" onclick="testCEcho()">🔌 Test C-ECHO (Ping TCP)</button>
+          </div>
+          <div id="testCEchoResult"></div>
         </div>
-
-        <div class="btn-group">
-          <button class="btn btn-outline" onclick="testCEcho()">🔌 Test Conexion TCP</button>
-        </div>
-        <div id="testCEchoResult"></div>
       </div>
     </div>
 
@@ -977,19 +966,19 @@ function generateConfigHtml(): string {
         <div class="form-row">
           <div class="form-group">
             <label>UPS-RS Path (Workitems)</label>
-            <input type="text" id="worklistUpsPath" value="\${currentConfig.worklistUpsPath}">
+            <input type="text" id="worklistUpsPath" value="${currentConfig.worklistUpsPath}">
             <small>Endpoint UPS-RS para consultar procedimientos</small>
           </div>
           <div class="form-group">
             <label>QIDO-RS MWL Path</label>
-            <input type="text" id="worklistQidoMwlPath" value="\${currentConfig.worklistQidoMwlPath}">
+            <input type="text" id="worklistQidoMwlPath" value="${currentConfig.worklistQidoMwlPath}">
             <small>Endpoint alternativo para MWL</small>
           </div>
         </div>
         
         <div class="form-group">
           <div class="checkbox-group">
-            <input type="checkbox" id="worklistPreferUps" \${currentConfig.worklistPreferUps ? 'checked' : ''}>
+            <input type="checkbox" id="worklistPreferUps" ${currentConfig.worklistPreferUps ? 'checked' : ''}>
             <label for="worklistPreferUps" style="margin-bottom: 0;">Preferir UPS-RS sobre QIDO-RS MWL</label>
           </div>
         </div>
@@ -1026,12 +1015,37 @@ function generateConfigHtml(): string {
       var pacsType = document.getElementById('pacsType').value;
       var isNative = pacsType === 'dicom-native';
       var isHttp = pacsType === 'orthanc' || pacsType === 'dicomweb';
+      var isDicomweb = pacsType === 'dicomweb';
       
-      document.getElementById('dicomwebCard').style.display = isHttp ? 'block' : 'none';
-      document.getElementById('dicomNativeCard').style.display = isNative ? 'block' : 'none';
-      document.getElementById('pacsUrlGroup').style.display = isNative ? 'none' : '';
-      document.getElementById('httpAuthSection').style.display = isNative ? 'none' : '';
-      document.getElementById('testPacsGroup').style.display = isNative ? 'none' : '';
+      // Show/hide main sections
+      document.getElementById('httpSection').style.display = isHttp ? 'block' : 'none';
+      document.getElementById('nativeSection').style.display = isNative ? 'block' : 'none';
+      
+      // DICOMweb endpoints only for dicomweb type
+      document.getElementById('dicomwebEndpoints').style.display = isDicomweb ? 'block' : 'none';
+      document.getElementById('btnTestStow').style.display = isDicomweb ? '' : 'none';
+      
+      // Update type description
+      var desc = document.getElementById('pacsTypeDesc');
+      var hint = document.getElementById('pacsTypeHint');
+      if (pacsType === 'orthanc') {
+        desc.innerHTML = '<strong>Orthanc REST API</strong> — Conexion HTTP directa al API REST de Orthanc. Los estudios se envian via <code>/instances</code> y se consultan via <code>/studies</code>.';
+        hint.textContent = 'Ideal para Orthanc local o en red. Usa los endpoints REST nativos de Orthanc.';
+      } else if (pacsType === 'dicomweb') {
+        desc.innerHTML = '<strong>DICOMweb</strong> — Protocolo estandar (STOW-RS, QIDO-RS, WADO-RS). Compatible con DCM4CHEE, Google Cloud Healthcare, Azure DICOM, Horos, y otros.';
+        hint.textContent = 'Compatible con cualquier PACS que soporte DICOMweb (IHE standard).';
+      } else {
+        desc.innerHTML = '<strong>DICOM Nativo TCP</strong> — Conexion directa TCP usando C-STORE, C-ECHO y C-FIND. Compatible con Synapse, DCM4CHEE, Conquest, Horos, y PACS legacy.';
+        hint.textContent = 'Para PACS que no tienen interfaz HTTP/DICOMweb o cuando se requiere protocolo DICOM puro.';
+      }
+      
+      // URL hint changes per type
+      var urlHint = document.getElementById('pacsUrlHint');
+      if (urlHint) {
+        urlHint.textContent = pacsType === 'orthanc' 
+          ? 'URL de Orthanc (ej: http://localhost:8042)' 
+          : 'URL base del servidor DICOMweb (ej: https://pacs.hospital.cl/dicomweb)';
+      }
     }
     togglePacsFields();
 
