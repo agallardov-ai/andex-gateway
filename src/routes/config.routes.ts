@@ -5,6 +5,8 @@
  */
 
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
+import fs from 'fs';
+import path from 'path';
 import { config } from '../config/env.js';
 import { dashboardAuth } from '../plugins/auth.plugin.js';
 import { queryWorklist, getWorklistConfig, configureWorklist } from '../services/worklist.service.js';
@@ -105,10 +107,124 @@ export async function configRoutes(fastify: FastifyInstance): Promise<void> {
       
       console.log('\u{1F527} Config guardada:', Object.keys(updates).join(', '));
       
+      // Auto-generate .env file in sync
+      const envResult = writeEnvFile();
+      
       return reply.send({
         success: true,
-        message: 'Configuracion guardada. Reinicie el Gateway para aplicar todos los cambios.'
+        message: 'Configuracion guardada en gateway-config.json' + (envResult.success ? ' y .env actualizado.' : '.') + ' Reinicie el Gateway para aplicar todos los cambios.',
+        envSynced: envResult.success,
       });
+    }
+  });
+
+  // ========================================
+  // .ENV FILE GENERATION
+  // ========================================
+
+  /** Generate .env file content from current config (JSON + env + defaults merged) */
+  function generateEnvContent(): string {
+    const s = configStore.getAll();
+    const lines: string[] = [
+      '# ============================================',
+      '# ANDEX GATEWAY - Configuracion generada automaticamente',
+      `# Generado: ${new Date().toISOString()}`,
+      '# Desde: Dashboard de Configuracion Gateway',
+      '# ============================================',
+      '',
+      '# Identidad del centro',
+      `CENTRO_NOMBRE=${s.centroNombre || config.centroNombre}`,
+      `CENTRO_ID=${s.centroId || config.centroId}`,
+      '',
+      '# Gateway',
+      `PORT=${s.port || config.port}`,
+      `NODE_ENV=${config.nodeEnv}`,
+      '',
+      '# Seguridad',
+      `API_KEY=${s.apiKey || config.apiKey}`,
+      `DASHBOARD_USER=${s.dashboardUser || config.dashboardUser}`,
+      `DASHBOARD_PASSWORD=${s.dashboardPassword || config.dashboardPassword}`,
+      `ALLOWED_ORIGINS=${s.allowedOrigins || config.allowedOrigins.join(',')}`,
+      '',
+      '# PACS',
+      `PACS_TYPE=${s.pacsType || config.pacsType}`,
+      `PACS_BASE_URL=${s.pacsBaseUrl || config.pacsBaseUrl}`,
+      '',
+      '# Autenticacion PACS',
+      `PACS_AUTH_TYPE=${s.pacsAuthType || config.pacsAuthType}`,
+      `PACS_USERNAME=${s.pacsUsername || config.pacsUsername}`,
+      `PACS_PASSWORD=${s.pacsPassword || config.pacsPassword}`,
+      '',
+      '# DICOMweb Endpoints',
+      `PACS_STOW_ENDPOINT=${s.pacsStowEndpoint || config.pacsStowEndpoint}`,
+      `PACS_QIDO_ENDPOINT=${s.pacsQidoEndpoint || config.pacsQidoEndpoint}`,
+      `PACS_WADO_ENDPOINT=${s.pacsWadoEndpoint || config.pacsWadoEndpoint}`,
+      '',
+      '# DICOM Nativo (TCP)',
+      `GATEWAY_AE_TITLE=${s.gatewayAeTitle || config.gatewayAeTitle}`,
+      `PACS_DICOM_HOST=${s.pacsDicomHost || config.pacsDicomHost}`,
+      `PACS_DICOM_PORT=${s.pacsDicomPort || config.pacsDicomPort}`,
+      `PACS_AE_TITLE=${s.pacsAeTitle || config.pacsAeTitle}`,
+      `GATEWAY_DICOM_PORT=${s.gatewayDicomPort || config.gatewayDicomPort}`,
+      '',
+      '# Worklist',
+      `WORKLIST_ENDPOINT=${s.worklistEndpoint || config.worklistEndpoint}`,
+      `WORKLIST_MWL_ENDPOINT=${s.worklistMwlEndpoint || config.worklistMwlEndpoint}`,
+      `WORKLIST_PREFER_UPS=${s.worklistPreferUps !== undefined ? s.worklistPreferUps : config.worklistPreferUps}`,
+      `WORKLIST_DEFAULT_MODALITY=${s.worklistDefaultModality || config.worklistDefaultModality}`,
+      '',
+      '# Storage',
+      `STORAGE_PATH=${config.storagePath}`,
+      '',
+      '# Queue',
+      `QUEUE_RETRY_INTERVAL=${config.queueRetryInterval}`,
+      `QUEUE_MAX_RETRIES=${config.queueMaxRetries}`,
+      `CLEANUP_AFTER_HOURS=${config.cleanupAfterHours}`,
+      '',
+    ];
+    return lines.join('\n') + '\n';
+  }
+
+  /** Write .env file to gateway root */
+  function writeEnvFile(): { success: boolean; path: string; error?: string } {
+    try {
+      const envPath = path.join(process.cwd(), '.env');
+      const content = generateEnvContent();
+      fs.writeFileSync(envPath, content, 'utf-8');
+      console.log('\u{1F4DD} .env generado/actualizado:', envPath);
+      return { success: true, path: envPath };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error('\u274C Error escribiendo .env:', msg);
+      return { success: false, path: '', error: msg };
+    }
+  }
+
+  // POST /api/config/generate-env - Generar y guardar .env
+  fastify.post('/api/config/generate-env', {
+    preHandler: dashboardAuth,
+    handler: async (request: FastifyRequest, reply: FastifyReply) => {
+      const result = writeEnvFile();
+      if (result.success) {
+        return reply.send({
+          success: true,
+          message: `Archivo .env generado exitosamente en ${result.path}`,
+          path: result.path,
+        });
+      }
+      return reply.status(500).send({ success: false, error: result.error });
+    }
+  });
+
+  // GET /api/config/download-env - Descargar .env como archivo
+  fastify.get('/api/config/download-env', {
+    preHandler: dashboardAuth,
+    handler: async (request: FastifyRequest, reply: FastifyReply) => {
+      const content = generateEnvContent();
+      return reply
+        .header('Content-Type', 'text/plain')
+        .header('Content-Disposition', 'attachment; filename=".env"')
+        .send(content);
     }
   });
 
@@ -613,6 +729,22 @@ function generateConfigHtml(): string {
     .checkbox-group input[type="checkbox"] { width: auto; }
     .section-title { font-size: 14px; font-weight: 600; color: #4f46e5; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 2px solid #e5e7eb; }
     code { background: #f3f4f6; padding: 2px 6px; border-radius: 4px; font-size: 13px; }
+    /* --- First config banner --- */
+    .first-config-banner { background: linear-gradient(135deg, #fef3c7, #fde68a); border: 1px solid #f59e0b; border-radius: 12px; padding: 16px 20px; margin-bottom: 20px; display: flex; align-items: flex-start; gap: 12px; }
+    .first-config-banner .banner-icon { font-size: 28px; flex-shrink: 0; }
+    .first-config-banner .banner-text h3 { font-size: 15px; font-weight: 700; color: #92400e; margin-bottom: 4px; }
+    .first-config-banner .banner-text p { font-size: 13px; color: #78350f; line-height: 1.5; margin: 0; }
+    .first-config-banner .banner-text ul { font-size: 13px; color: #78350f; margin: 6px 0 0 18px; line-height: 1.8; }
+    /* --- Unconfigured field highlight --- */
+    .needs-config { border-color: #f59e0b !important; background: #fffbeb !important; box-shadow: 0 0 0 2px rgba(245,158,11,0.2) !important; }
+    .needs-config-label { color: #b45309 !important; font-weight: 600 !important; }
+    .needs-config-label::after { content: ' ⚠ pendiente'; font-size: 11px; color: #d97706; font-weight: 500; margin-left: 6px; }
+    .config-ok { border-color: #22c55e !important; }
+    .config-legend { display: flex; gap: 16px; align-items: center; margin-bottom: 16px; font-size: 12px; color: #6b7280; flex-wrap: wrap; }
+    .config-legend span { display: inline-flex; align-items: center; gap: 4px; }
+    .config-legend .dot { width: 12px; height: 12px; border-radius: 3px; border: 2px solid; display: inline-block; }
+    .config-legend .dot-pending { border-color: #f59e0b; background: #fffbeb; }
+    .config-legend .dot-ok { border-color: #22c55e; background: #dcfce7; }
   </style>
 </head>
 <body>
@@ -629,10 +761,33 @@ function generateConfigHtml(): string {
   <div class="container">
     <div id="status"></div>
 
+    <!-- First config detection banner -->
+    <div id="firstConfigBanner" class="first-config-banner" style="display:none;">
+      <div class="banner-icon">⚠️</div>
+      <div class="banner-text">
+        <h3>Primera Configuración Detectada</h3>
+        <p>El Gateway está usando valores por defecto. Para que funcione correctamente, debe completar <strong>todos</strong> los campos resaltados en amarillo:</p>
+        <ul>
+          <li><strong>Centro Médico</strong> — Nombre, ID y AE Title del Gateway</li>
+          <li><strong>Seguridad</strong> — Cambie la contraseña del Dashboard y la API Key</li>
+          <li><strong>Servidor PACS</strong> — Seleccione el tipo y configure la conexión</li>
+          <li><strong>Worklist</strong> — Configure los endpoints si su PACS tiene worklist</li>
+        </ul>
+      </div>
+    </div>
+
+    <!-- Legend -->
+    <div class="config-legend" id="configLegend" style="display:none;">
+      <span><span class="dot dot-pending"></span> Pendiente de configurar</span>
+      <span><span class="dot dot-ok"></span> Configurado</span>
+      <span style="color:#9ca3af;">|</span>
+      <span id="configProgress">0 de 0 campos configurados</span>
+    </div>
+
     <!-- Centro -->
     <div class="card">
       <div class="card-header">
-        <h2>\U0001F3E5 Centro Medico</h2>
+        <h2>🏥 Centro Medico</h2>
       </div>
       <div class="card-body">
         <div class="form-row">
@@ -657,7 +812,7 @@ function generateConfigHtml(): string {
     <!-- Seguridad -->
     <div class="card">
       <div class="card-header">
-        <h2>\U0001F510 Seguridad & Acceso</h2>
+        <h2>🔐 Seguridad & Acceso</h2>
       </div>
       <div class="card-body">
         <div class="form-row-3">
@@ -687,7 +842,7 @@ function generateConfigHtml(): string {
     <!-- PACS -->
     <div class="card">
       <div class="card-header">
-        <h2>\U0001F5A5\uFE0F Servidor PACS</h2>
+        <h2>🖥️ Servidor PACS</h2>
       </div>
       <div class="card-body">
         <div class="form-row">
@@ -729,7 +884,7 @@ function generateConfigHtml(): string {
         </div>
 
         <div class="btn-group" id="testPacsGroup">
-          <button class="btn btn-outline" onclick="testPacs()">\U0001F50C Test Conexion</button>
+          <button class="btn btn-outline" onclick="testPacs()">🔌 Test Conexion</button>
         </div>
         <div id="testPacsResult"></div>
       </div>
@@ -738,7 +893,7 @@ function generateConfigHtml(): string {
     <!-- DICOMweb Paths -->
     <div class="card" id="dicomwebCard">
       <div class="card-header">
-        <h2>\U0001F4E1 Endpoints DICOMweb</h2>
+        <h2>📡 Endpoints DICOMweb</h2>
       </div>
       <div class="card-body">
         <p class="section-title">STOW-RS (Almacenamiento)</p>
@@ -748,7 +903,7 @@ function generateConfigHtml(): string {
           <small>Endpoint para subir estudios DICOM (ej: /studies, /dcm4chee-arc/aets/DCM4CHEE/rs/studies)</small>
         </div>
         <div class="btn-group">
-          <button class="btn btn-amber" onclick="testStow()">\U0001F4E4 Test STOW</button>
+          <button class="btn btn-amber" onclick="testStow()">📤 Test STOW</button>
         </div>
         <div id="testStowResult"></div>
 
@@ -771,7 +926,7 @@ function generateConfigHtml(): string {
     <!-- DICOM Native -->
     <div class="card" id="dicomNativeCard">
       <div class="card-header">
-        <h2>\U0001F4E1 DICOM Nativo (TCP)</h2>
+        <h2>📡 DICOM Nativo (TCP)</h2>
       </div>
       <div class="card-body">
         <div class="form-row">
@@ -783,7 +938,7 @@ function generateConfigHtml(): string {
         </div>
 
 
-        <p class="section-title" style="margin-top: 20px;">\U0001F5A5\uFE0F PACS Remoto (Synapse / DCM4CHEE / etc)</p>
+        <p class="section-title" style="margin-top: 20px;">🖥️ PACS Remoto (Synapse / DCM4CHEE / etc)</p>
         <div class="form-row-3">
           <div class="form-group">
             <label>PACS Host / IP</label>
@@ -807,7 +962,7 @@ function generateConfigHtml(): string {
         </div>
 
         <div class="btn-group">
-          <button class="btn btn-outline" onclick="testCEcho()">\U0001F50C Test Conexion TCP</button>
+          <button class="btn btn-outline" onclick="testCEcho()">🔌 Test Conexion TCP</button>
         </div>
         <div id="testCEchoResult"></div>
       </div>
@@ -816,7 +971,7 @@ function generateConfigHtml(): string {
     <!-- Worklist -->
     <div class="card">
       <div class="card-header">
-        <h2>\U0001F4CB Worklist (MWL)</h2>
+        <h2>📋 Worklist (MWL)</h2>
       </div>
       <div class="card-body">
         <div class="form-row">
@@ -840,7 +995,7 @@ function generateConfigHtml(): string {
         </div>
 
         <div class="btn-group">
-          <button class="btn btn-success" onclick="testWorklist()">\U0001F4CB Test Worklist</button>
+          <button class="btn btn-success" onclick="testWorklist()">📋 Test Worklist</button>
         </div>
         <div id="testWorklistResult"></div>
       </div>
@@ -848,10 +1003,12 @@ function generateConfigHtml(): string {
 
     <!-- Actions -->
     <div class="btn-group">
-      <button class="btn btn-primary" onclick="saveConfig()">\U0001F4BE Guardar Configuracion</button>
+      <button class="btn btn-primary" onclick="saveConfig()">💾 Guardar Configuracion</button>
+      <button class="btn btn-outline" onclick="downloadEnv()">📥 Descargar .env</button>
     </div>
+    <div id="envStatus" class="alert alert-success" style="display:none; margin-top: 12px;"></div>
     <div class="alert alert-info" style="margin-top: 12px;">
-      \U0001F4A1 La configuracion se guarda en <code>data/gateway-config.json</code>. Reinicie el Gateway para aplicar cambios de seguridad.
+      💡 Al guardar, se actualiza <code>data/gateway-config.json</code> y el archivo <code>.env</code> automaticamente. Reinicie el Gateway para aplicar cambios de seguridad.
     </div>
   </div>
 
@@ -1043,10 +1200,101 @@ function generateConfigHtml(): string {
       }
     }
 
+    async function downloadEnv() {
+      try {
+        var resp = await fetch('/api/config/download-env', { credentials: 'include' });
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        var blob = await resp.blob();
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url;
+        a.download = '.env';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      } catch (e) {
+        showStatus('Error descargando .env: ' + e.message, 'error');
+      }
+    }
+
     // Auto-refresh status every 30 seconds
     setInterval(function() {
       fetch('/api/config', { credentials: 'include' }).catch(function() {});
     }, 30000);
+
+    // ============================================
+    // DETECT UNCONFIGURED FIELDS (defaults → amber)
+    // ============================================
+    var DEFAULT_VALUES = {
+      'centroNombre': ['Mi Centro Medico', ''],
+      'centroId': ['CENTRO01', ''],
+      'apiKey': ['dev-api-key-cambiar', ''],
+      'dashboardUser': ['admin'],
+      'pacsUrl': ['http://localhost:8042', ''],
+      'pacsDicomHost': ['', '192.168.1.100'],
+      'pacsAeTitle': ['', 'SYNAPSE'],
+    };
+
+    function checkFieldConfig() {
+      var total = 0;
+      var configured = 0;
+      
+      Object.keys(DEFAULT_VALUES).forEach(function(fieldId) {
+        var el = document.getElementById(fieldId);
+        if (!el || el.offsetParent === null) return; // skip hidden fields
+        
+        total++;
+        var val = el.value.trim();
+        var defaults = DEFAULT_VALUES[fieldId];
+        var isDefault = !val || defaults.indexOf(val) >= 0;
+        
+        var label = el.closest('.form-group')?.querySelector('label');
+        
+        if (isDefault) {
+          el.classList.add('needs-config');
+          el.classList.remove('config-ok');
+          if (label) label.classList.add('needs-config-label');
+          if (label) label.classList.remove('config-ok-label');
+        } else {
+          el.classList.remove('needs-config');
+          el.classList.add('config-ok');
+          if (label) label.classList.remove('needs-config-label');
+          configured++;
+        }
+      });
+      
+      // Also check password field (special: placeholder-only)
+      var dashPass = document.getElementById('dashboardPassword');
+      if (dashPass) {
+        total++; // count it
+        // We can't read the actual stored password, so if it hasn't been changed in this session, mark it
+      }
+      
+      // Show/hide banner
+      var banner = document.getElementById('firstConfigBanner');
+      var legend = document.getElementById('configLegend');
+      var progress = document.getElementById('configProgress');
+      var isFirstConfig = configured < (total * 0.5); // less than half configured = first time
+      
+      if (banner) banner.style.display = isFirstConfig ? 'flex' : 'none';
+      if (legend) legend.style.display = total > 0 ? 'flex' : 'none';
+      if (progress) progress.textContent = configured + ' de ' + total + ' campos configurados';
+    }
+    
+    // Run on page load and after type changes
+    checkFieldConfig();
+    document.getElementById('pacsType')?.addEventListener('change', function() {
+      setTimeout(checkFieldConfig, 100);
+    });
+    
+    // Re-check after save
+    var origSaveConfig = saveConfig;
+    saveConfig = async function() {
+      await origSaveConfig();
+      setTimeout(checkFieldConfig, 500);
+    };
+
   </script>
 </body>
 </html>`;
