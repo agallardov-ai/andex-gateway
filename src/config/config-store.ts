@@ -121,6 +121,21 @@ class ConfigStoreClass {
     return { ...this.data };
   }
 
+  /** Get string value: ENV > JSON > default (para credenciales de seguridad) */
+  getEnvOrJson(jsonKey: keyof GatewayConfig, envKey: string, defaultValue: string = ''): string {
+    if (!this.loaded) this.load();
+    // ENV tiene prioridad sobre JSON — importante para Docker/produccion
+    const envVal = process.env[envKey];
+    if (envVal !== undefined && envVal !== '') {
+      return envVal;
+    }
+    const jsonVal = this.data[jsonKey];
+    if (jsonVal !== undefined && jsonVal !== null && jsonVal !== '') {
+      return String(jsonVal);
+    }
+    return defaultValue;
+  }
+
   /** Get string value: JSON > env > default */
   getOrEnv(jsonKey: keyof GatewayConfig, envKey: string, defaultValue: string = ''): string {
     if (!this.loaded) this.load();

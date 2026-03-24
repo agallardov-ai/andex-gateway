@@ -20,9 +20,9 @@ export const config = {
   nodeEnv: process.env.NODE_ENV || 'development',
 
   // ===== SEGURIDAD =====
-  apiKey: store.getOrEnv('apiKey', 'API_KEY', 'dev-api-key-cambiar'),
-  dashboardUser: store.getOrEnv('dashboardUser', 'DASHBOARD_USER', 'admin'),
-  dashboardPassword: store.getOrEnv('dashboardPassword', 'DASHBOARD_PASSWORD', 'admin123'),
+  apiKey: store.getEnvOrJson('apiKey', 'API_KEY', 'dev-api-key-cambiar'),
+  dashboardUser: store.getEnvOrJson('dashboardUser', 'DASHBOARD_USER', 'admin'),
+  dashboardPassword: store.getEnvOrJson('dashboardPassword', 'DASHBOARD_PASSWORD', 'admin123'),
   allowedOrigins: store.getOrEnv('allowedOrigins', 'ALLOWED_ORIGINS', 'http://localhost:5173,http://localhost:3000')
     .split(',')
     .map(o => o.trim()),

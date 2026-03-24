@@ -3,7 +3,8 @@ services:
     build: .
     container_name: andex-gateway
     ports:
-      - "3001:3001"
+      - "${HTTP_PORT:-3001}:3001"
+      - "${HTTPS_PORT:-3443}:3443"
     environment:
       # Identidad del centro
       - CENTRO_NOMBRE=${CENTRO_NOMBRE:-Hospital Naval Talcahuano}
@@ -11,6 +12,7 @@ services:
       
       # Gateway
       - PORT=3001
+      - HTTPS_PORT=3443
       - NODE_ENV=production
       
       # Seguridad
@@ -63,6 +65,7 @@ services:
       - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY:-}
     volumes:
       - gateway-data:/app/data
+      - ./certs:/app/certs:ro    # TLS certs (opcional, si no existe HTTPS se desactiva)
     depends_on:
       orthanc:
         condition: service_healthy

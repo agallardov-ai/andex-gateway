@@ -165,6 +165,7 @@ async function start() {
     \ud83d\udcc8 M\u00e9tricas: http://localhost:${config.port}/observability
     \ud83d\udd0c PACS: ${config.pacsUrl} (${config.pacsType})
     \ud83d\udd11 API Key: ${config.apiKey.substring(0, 8)}****
+    \ud83d\udc64 Auth:   ${config.dashboardUser} / ${config.dashboardPassword[0]}${'*'.repeat(config.dashboardPassword.length - 2)}${config.dashboardPassword.slice(-1)}
     
     Ready to receive DICOM files!
     `);
