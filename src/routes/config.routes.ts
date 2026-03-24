@@ -52,6 +52,8 @@ export async function configRoutes(fastify: FastifyInstance): Promise<void> {
           worklistUpsPath: s.worklistEndpoint || config.worklistUpsPath,
           worklistQidoMwlPath: s.worklistMwlEndpoint || config.worklistQidoMwlPath,
           worklistPreferUps: s.worklistPreferUps !== undefined ? s.worklistPreferUps : config.worklistPreferUps,
+          worklistDefaultModality: s.worklistDefaultModality || config.worklistDefaultModality,
+          worklistStationAET: s.worklistStationAET || config.worklistStationAET,
         }
       });
     }
@@ -86,6 +88,8 @@ export async function configRoutes(fastify: FastifyInstance): Promise<void> {
       if (body.worklistUpsPath) updates.worklistEndpoint = body.worklistUpsPath;
       if (body.worklistQidoMwlPath) updates.worklistMwlEndpoint = body.worklistQidoMwlPath;
       if (body.worklistPreferUps !== undefined) updates.worklistPreferUps = !!body.worklistPreferUps;
+      if (body.worklistDefaultModality) updates.worklistDefaultModality = body.worklistDefaultModality;
+      if (body.worklistStationAET !== undefined) updates.worklistStationAET = body.worklistStationAET;
       
       const result = configStore.save(updates);
       
@@ -173,6 +177,7 @@ export async function configRoutes(fastify: FastifyInstance): Promise<void> {
       `WORKLIST_MWL_ENDPOINT=${s.worklistMwlEndpoint || config.worklistMwlEndpoint}`,
       `WORKLIST_PREFER_UPS=${s.worklistPreferUps !== undefined ? s.worklistPreferUps : config.worklistPreferUps}`,
       `WORKLIST_DEFAULT_MODALITY=${s.worklistDefaultModality || config.worklistDefaultModality}`,
+      `WORKLIST_STATION_AET=${s.worklistStationAET || config.worklistStationAET}`,
       '',
       '# Storage',
       `STORAGE_PATH=${config.storagePath}`,
@@ -1423,6 +1428,8 @@ function generateConfigHtml(): string {
     worklistUpsPath: s.worklistEndpoint || config.worklistUpsPath,
     worklistQidoMwlPath: s.worklistMwlEndpoint || config.worklistQidoMwlPath,
     worklistPreferUps: s.worklistPreferUps !== undefined ? s.worklistPreferUps : config.worklistPreferUps,
+    worklistDefaultModality: s.worklistDefaultModality || config.worklistDefaultModality,
+    worklistStationAET: s.worklistStationAET || config.worklistStationAET,
     gatewayAeTitle: s.gatewayAeTitle || config.gatewayAeTitle,
     pacsDicomHost: s.pacsDicomHost || config.pacsDicomHost,
     pacsDicomPort: s.pacsDicomPort || config.pacsDicomPort,
@@ -1770,6 +1777,19 @@ function generateConfigHtml(): string {
           </div>
         </div>
         
+        <div class="form-row">
+          <div class="form-group">
+            <label>Modalidad por Defecto</label>
+            <input type="text" id="worklistDefaultModality" value="${currentConfig.worklistDefaultModality}" placeholder="ES">
+            <small>Modalidad DICOM para filtrar Worklist (ES=Endoscopia, US=Ultrasonido, CT, MR...)</small>
+          </div>
+          <div class="form-group">
+            <label>Worklist Station AE Title</label>
+            <input type="text" id="worklistStationAET" value="${currentConfig.worklistStationAET}" placeholder="(vacio = sin filtro)">
+            <small>AE Title de la estacion para filtrar la Worklist. Vacio = recibir todo.</small>
+          </div>
+        </div>
+
         <div class="form-group">
           <div class="checkbox-group">
             <input type="checkbox" id="worklistPreferUps" ${currentConfig.worklistPreferUps ? 'checked' : ''}>
@@ -1994,6 +2014,8 @@ function generateConfigHtml(): string {
         worklistUpsPath: document.getElementById('worklistUpsPath').value,
         worklistQidoMwlPath: document.getElementById('worklistQidoMwlPath').value,
         worklistPreferUps: document.getElementById('worklistPreferUps').checked,
+        worklistDefaultModality: document.getElementById('worklistDefaultModality').value,
+        worklistStationAET: document.getElementById('worklistStationAET').value,
       };
       
       var password = document.getElementById('pacsPassword').value;

@@ -2,13 +2,11 @@ import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { config } from '../config/env.js';
 import { getJobs, getJobStats } from '../db/database.js';
 import { checkOrthancHealth } from '../services/orthanc.service.js';
-import { dashboardAuth } from '../plugins/auth.plugin.js';
 
 export async function uiRoutes(fastify: FastifyInstance): Promise<void> {
 
-  // Dashboard HTML
+  // Dashboard HTML (public — no auth required)
   fastify.get('/', {
-    preHandler: dashboardAuth,
     handler: async (request: FastifyRequest, reply: FastifyReply) => {
       const orthancStatus = await checkOrthancHealth();
       const stats = getJobStats();
@@ -23,16 +21,15 @@ export async function uiRoutes(fastify: FastifyInstance): Promise<void> {
         jobs: recentJobs,
         httpPort: config.port,
         httpsPort: parseInt(process.env.HTTPS_PORT || '3443', 10),
-        apiKey: config.apiKey,
+        apiKey: '••••••••',
       });
 
       return reply.type('text/html').send(html);
     }
   });
 
-  // Dashboard API (for AJAX refresh)
+  // Dashboard API (for AJAX refresh, public)
   fastify.get('/dashboard/data', {
-    preHandler: dashboardAuth,
     handler: async (_request: FastifyRequest, reply: FastifyReply) => {
       const orthancStatus = await checkOrthancHealth();
       const stats = getJobStats();
@@ -44,7 +41,7 @@ export async function uiRoutes(fastify: FastifyInstance): Promise<void> {
         jobs: recentJobs,
         httpPort: config.port,
         httpsPort: parseInt(process.env.HTTPS_PORT || '3443', 10),
-        apiKey: config.apiKey,
+        apiKey: '••••••••',
       });
     }
   });
