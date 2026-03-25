@@ -390,6 +390,18 @@ export async function configRoutes(fastify: FastifyInstance): Promise<void> {
     } catch { return false; }
   }
 
+  // GET /api/config/ip-info - Quick IP info for IT handoff
+  fastify.get('/api/config/ip-info', {
+    preHandler: dashboardAuth,
+    handler: async (_request: FastifyRequest, reply: FastifyReply) => {
+      const interfaces = getLocalNetworkInfo();
+      return reply.send({
+        hostname: os.hostname(),
+        interfaces,
+      });
+    }
+  });
+
   // POST /api/config/network-diagnostic - Full network diagnostic
   fastify.post('/api/config/network-diagnostic', {
     preHandler: dashboardAuth,
@@ -2138,9 +2150,22 @@ function generateConfigHtml(): string {
     <div class="card" style="border-left: 4px solid #3b82f6;">
       <div class="card-body">
         <h2>🔍 Diagnóstico de Red</h2>
-        <p style="color:#6b7280; font-size:13px; margin-bottom:16px;">
+        <p style="color:#6b7280; font-size:13px; margin-bottom:12px;">
           Verifica que este equipo está conectado a la red correcta y puede alcanzar el PACS, Worklist y servicios cloud.
         </p>
+
+        <!-- IP Info Banner -->
+        <div id="ipInfoBanner" style="background:#f0f9ff;border:1px solid #bae6fd;border-radius:8px;padding:14px 16px;margin-bottom:16px;">
+          <div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;">
+            <span style="font-size:15px;">🌐</span>
+            <span style="font-weight:600;font-size:14px;color:#0369a1;">IP de este Gateway</span>
+            <span id="ipHostname" style="font-size:12px;color:#64748b;margin-left:auto;"></span>
+          </div>
+          <div id="ipList" style="display:flex;flex-direction:column;gap:6px;">
+            <div style="color:#94a3b8;font-size:13px;">Cargando...</div>
+          </div>
+        </div>
+
         <div class="btn-group">
           <button class="btn btn-primary" onclick="runNetworkDiagnostic()" id="btnNetDiag">🔍 Ejecutar Diagnóstico</button>
         </div>
@@ -2516,6 +2541,58 @@ function generateConfigHtml(): string {
     // ============================================
     // NETWORK DIAGNOSTIC
     // ============================================
+    // Load IP info on page load
+    (function loadIpInfo() {
+      fetch('/api/config/ip-info', { credentials: 'include' })
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+          var hostname = document.getElementById('ipHostname');
+          var list = document.getElementById('ipList');
+          if (hostname) hostname.textContent = data.hostname || '';
+          if (!list) return;
+          if (!data.interfaces || data.interfaces.length === 0) {
+            list.innerHTML = '<div style="color:#ef4444;font-size:13px;">⚠️ No se detectaron interfaces de red</div>';
+            return;
+          }
+          var html = '';
+          data.interfaces.forEach(function(iface, idx) {
+            html += '<div style="display:flex;align-items:center;gap:10px;padding:8px 10px;background:#fff;border:1px solid #e0f2fe;border-radius:6px;">';
+            html += '<span style="font-weight:600;font-size:13px;min-width:70px;color:#475569;">' + iface.name + '</span>';
+            html += '<code style="font-size:16px;font-weight:700;color:#0c4a6e;letter-spacing:0.5px;">' + iface.ip + '</code>';
+            html += '<span style="font-size:11px;color:#94a3b8;">/' + iface.netmask + '</span>';
+            html += '<button data-ip="' + iface.ip + '" onclick="copyIp(this.dataset.ip, this)" style="margin-left:auto;background:#0ea5e9;color:#fff;border:none;padding:4px 10px;border-radius:4px;cursor:pointer;font-size:12px;font-weight:500;" title="Copiar IP">📋 Copiar</button>';
+            html += '</div>';
+          });
+          list.innerHTML = html;
+        })
+        .catch(function() {
+          var list = document.getElementById('ipList');
+          if (list) list.innerHTML = '<div style="color:#94a3b8;font-size:13px;">No se pudo obtener la IP</div>';
+        });
+    })();
+
+    function copyIp(ip, btn) {
+      if (navigator.clipboard) {
+        navigator.clipboard.writeText(ip).then(function() {
+          var orig = btn.innerHTML;
+          btn.innerHTML = '✅ Copiado';
+          btn.style.background = '#22c55e';
+          setTimeout(function() { btn.innerHTML = orig; btn.style.background = '#0ea5e9'; }, 2000);
+        });
+      } else {
+        var ta = document.createElement('textarea');
+        ta.value = ip;
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+        var orig = btn.innerHTML;
+        btn.innerHTML = '✅ Copiado';
+        btn.style.background = '#22c55e';
+        setTimeout(function() { btn.innerHTML = orig; btn.style.background = '#0ea5e9'; }, 2000);
+      }
+    }
+
     async function runNetworkDiagnostic() {
       var btn = document.getElementById('btnNetDiag');
       var resultDiv = document.getElementById('netDiagResult');
