@@ -7,6 +7,8 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import fs from 'fs';
 import path from 'path';
+import net from 'net';
+import os from 'os';
 import { config, supabaseConfig } from '../config/env.js';
 import { dashboardAuth } from '../plugins/auth.plugin.js';
 import { queryWorklist, getWorklistConfig, configureWorklist } from '../services/worklist.service.js';
@@ -324,6 +326,269 @@ export async function configRoutes(fastify: FastifyInstance): Promise<void> {
           centroId,
         });
       }
+    }
+  });
+
+  // ========================================
+  // NETWORK DIAGNOSTIC — Full connectivity check
+  // ========================================
+
+  /** TCP port check with timeout */
+  function tcpCheck(host: string, port: number, timeoutMs = 3000): Promise<{ open: boolean; latency: number; error?: string }> {
+    return new Promise((resolve) => {
+      const start = Date.now();
+      const socket = new net.Socket();
+      socket.setTimeout(timeoutMs);
+      socket.once('connect', () => {
+        const latency = Date.now() - start;
+        socket.destroy();
+        resolve({ open: true, latency });
+      });
+      socket.once('timeout', () => {
+        socket.destroy();
+        resolve({ open: false, latency: Date.now() - start, error: 'Timeout — el puerto no responde' });
+      });
+      socket.once('error', (err) => {
+        resolve({ open: false, latency: Date.now() - start, error: err.message });
+      });
+      socket.connect(port, host);
+    });
+  }
+
+  /** Get local network interfaces (non-internal IPv4) */
+  function getLocalNetworkInfo(): Array<{ name: string; ip: string; mac: string; netmask: string; cidr: string }> {
+    const ifaces = os.networkInterfaces();
+    const results: Array<{ name: string; ip: string; mac: string; netmask: string; cidr: string }> = [];
+    for (const [name, addrs] of Object.entries(ifaces)) {
+      if (!addrs) continue;
+      for (const addr of addrs) {
+        if (addr.family === 'IPv4' && !addr.internal) {
+          results.push({
+            name,
+            ip: addr.address,
+            mac: addr.mac,
+            netmask: addr.netmask,
+            cidr: addr.cidr || `${addr.address}/${addr.netmask}`,
+          });
+        }
+      }
+    }
+    return results;
+  }
+
+  /** Check if two IPs are on the same subnet */
+  function sameSubnet(ip1: string, ip2: string, mask: string): boolean {
+    try {
+      const ip1Parts = ip1.split('.').map(Number);
+      const ip2Parts = ip2.split('.').map(Number);
+      const maskParts = mask.split('.').map(Number);
+      for (let i = 0; i < 4; i++) {
+        if ((ip1Parts[i] & maskParts[i]) !== (ip2Parts[i] & maskParts[i])) return false;
+      }
+      return true;
+    } catch { return false; }
+  }
+
+  // POST /api/config/network-diagnostic - Full network diagnostic
+  fastify.post('/api/config/network-diagnostic', {
+    preHandler: dashboardAuth,
+    handler: async (request: FastifyRequest, reply: FastifyReply) => {
+      const s = configStore.getAll();
+      const pacsType = s.pacsType || config.pacsType;
+      const pacsUrl = s.pacsBaseUrl || config.pacsUrl;
+      const pacsHost = s.pacsDicomHost || config.pacsDicomHost;
+      const pacsPort = Number(s.pacsDicomPort || config.pacsDicomPort) || 4242;
+      const label = getPacsTypeLabel(pacsType);
+
+      const results: any = {
+        timestamp: new Date().toISOString(),
+        hostname: os.hostname(),
+        platform: `${os.type()} ${os.release()} (${os.arch()})`,
+        pacsType,
+        pacsTypeLabel: label,
+        interfaces: getLocalNetworkInfo(),
+        checks: [] as Array<{ name: string; target: string; status: 'pass' | 'fail' | 'skip'; latency?: number; detail: string; icon: string }>,
+      };
+
+      // ----- Check 1: HTTP(s) PACS connectivity -----
+      if (pacsType !== 'dicom-native' && pacsUrl) {
+        try {
+          const urlObj = new URL(pacsUrl);
+          const httpHost = urlObj.hostname;
+          const httpPort = Number(urlObj.port) || (urlObj.protocol === 'https:' ? 443 : 80);
+
+          const tcp = await tcpCheck(httpHost, httpPort);
+          results.checks.push({
+            name: 'PACS HTTP/DICOMweb',
+            target: `${httpHost}:${httpPort}`,
+            status: tcp.open ? 'pass' : 'fail',
+            latency: tcp.latency,
+            detail: tcp.open
+              ? `Puerto abierto — ${label} accesible (${tcp.latency}ms)`
+              : `Puerto cerrado — ${tcp.error}`,
+            icon: tcp.open ? '✅' : '❌',
+          });
+
+          // If port is open, try an actual HTTP request
+          if (tcp.open) {
+            try {
+              const startHttp = Date.now();
+              const resp = await fetch(pacsUrl, {
+                method: 'GET',
+                signal: AbortSignal.timeout(5000),
+                headers: s.pacsAuthType === 'basic'
+                  ? { 'Authorization': 'Basic ' + Buffer.from(`${s.pacsUsername || config.pacsUsername}:${s.pacsPassword || config.pacsPassword}`).toString('base64') }
+                  : {},
+              });
+              const httpLatency = Date.now() - startHttp;
+              results.checks.push({
+                name: 'PACS HTTP Response',
+                target: pacsUrl,
+                status: resp.ok || resp.status === 401 || resp.status === 404 ? 'pass' : 'fail',
+                latency: httpLatency,
+                detail: `HTTP ${resp.status} ${resp.statusText} (${httpLatency}ms)`,
+                icon: resp.ok ? '✅' : resp.status === 401 ? '🔐' : '⚠️',
+              });
+            } catch (httpErr) {
+              results.checks.push({
+                name: 'PACS HTTP Response',
+                target: pacsUrl,
+                status: 'fail',
+                detail: `Error HTTP: ${(httpErr as Error).message}`,
+                icon: '❌',
+              });
+            }
+          }
+        } catch {
+          results.checks.push({
+            name: 'PACS HTTP/DICOMweb',
+            target: pacsUrl,
+            status: 'fail',
+            detail: 'URL del PACS inválida',
+            icon: '❌',
+          });
+        }
+      }
+
+      // ----- Check 2: DICOM Native TCP -----
+      if (pacsHost && pacsHost !== '' && pacsHost !== 'localhost' || pacsType === 'dicom-native') {
+        const dicomHost = pacsHost || 'localhost';
+        const tcp = await tcpCheck(dicomHost, pacsPort);
+        results.checks.push({
+          name: 'PACS DICOM TCP',
+          target: `${dicomHost}:${pacsPort}`,
+          status: tcp.open ? 'pass' : 'fail',
+          latency: tcp.latency,
+          detail: tcp.open
+            ? `Puerto DICOM abierto (${tcp.latency}ms)`
+            : `Puerto DICOM cerrado — ${tcp.error}`,
+          icon: tcp.open ? '✅' : '❌',
+        });
+
+        // Check subnet match
+        const localIfaces = results.interfaces;
+        if (localIfaces.length > 0 && dicomHost !== 'localhost' && dicomHost !== '127.0.0.1') {
+          const onSameSubnet = localIfaces.some((iface: any) => sameSubnet(iface.ip, dicomHost, iface.netmask));
+          results.checks.push({
+            name: 'Misma Subred que PACS',
+            target: `${dicomHost} vs ${localIfaces.map((i: any) => i.ip).join(', ')}`,
+            status: onSameSubnet ? 'pass' : 'fail',
+            detail: onSameSubnet
+              ? `El Gateway y el PACS están en la misma red`
+              : `El Gateway NO está en la misma subred que ${dicomHost}. Verifique la VLAN o configuración de red.`,
+            icon: onSameSubnet ? '✅' : '⚠️',
+          });
+        }
+      }
+
+      // ----- Check 3: Worklist HTTP endpoint -----
+      if (pacsType !== 'dicom-native' && pacsUrl) {
+        const wlEndpoint = s.worklistMwlEndpoint || config.worklistQidoMwlPath || s.worklistEndpoint || config.worklistUpsPath;
+        if (wlEndpoint) {
+          try {
+            const wlUrl = `${pacsUrl}${wlEndpoint}`;
+            const startWl = Date.now();
+            const wlResp = await fetch(wlUrl, {
+              method: 'GET',
+              signal: AbortSignal.timeout(5000),
+              headers: s.pacsAuthType === 'basic'
+                ? { 'Authorization': 'Basic ' + Buffer.from(`${s.pacsUsername || config.pacsUsername}:${s.pacsPassword || config.pacsPassword}`).toString('base64') }
+                : {},
+            });
+            const wlLatency = Date.now() - startWl;
+            results.checks.push({
+              name: 'Worklist Endpoint',
+              target: wlUrl,
+              status: wlResp.ok || wlResp.status === 204 ? 'pass' : 'fail',
+              latency: wlLatency,
+              detail: `HTTP ${wlResp.status} (${wlLatency}ms)`,
+              icon: wlResp.ok || wlResp.status === 204 ? '✅' : '⚠️',
+            });
+          } catch (wlErr) {
+            results.checks.push({
+              name: 'Worklist Endpoint',
+              target: `${pacsUrl}${wlEndpoint}`,
+              status: 'fail',
+              detail: `Error: ${(wlErr as Error).message}`,
+              icon: '❌',
+            });
+          }
+        }
+      }
+
+      // ----- Check 4: Supabase Cloud -----
+      if (isSupabaseEnabled()) {
+        try {
+          const supaUrl = new URL(supabaseConfig.url);
+          const supaTcp = await tcpCheck(supaUrl.hostname, 443);
+          results.checks.push({
+            name: 'Supabase Cloud',
+            target: supaUrl.hostname,
+            status: supaTcp.open ? 'pass' : 'fail',
+            latency: supaTcp.latency,
+            detail: supaTcp.open
+              ? `Conexión a Supabase OK (${supaTcp.latency}ms)`
+              : `Sin conexión a Supabase — ${supaTcp.error}`,
+            icon: supaTcp.open ? '✅' : '❌',
+          });
+        } catch {
+          results.checks.push({
+            name: 'Supabase Cloud',
+            target: supabaseConfig.url,
+            status: 'skip',
+            detail: 'URL de Supabase inválida',
+            icon: '⚠️',
+          });
+        }
+      }
+
+      // ----- Check 5: Internet (google DNS) -----
+      const internetTcp = await tcpCheck('8.8.8.8', 53, 2000);
+      results.checks.push({
+        name: 'Internet (DNS)',
+        target: '8.8.8.8:53',
+        status: internetTcp.open ? 'pass' : 'fail',
+        latency: internetTcp.latency,
+        detail: internetTcp.open
+          ? `Acceso a Internet OK (${internetTcp.latency}ms)`
+          : `Sin acceso a Internet — ${internetTcp.error}`,
+        icon: internetTcp.open ? '✅' : '⚠️',
+      });
+
+      // Summary
+      const passed = results.checks.filter((c: any) => c.status === 'pass').length;
+      const failed = results.checks.filter((c: any) => c.status === 'fail').length;
+      const total = results.checks.length;
+
+      results.summary = {
+        passed, failed, total,
+        allGood: failed === 0,
+        message: failed === 0
+          ? `✅ ${passed}/${total} pruebas pasaron — Red OK`
+          : `⚠️ ${failed}/${total} pruebas fallaron — Revise la configuración de red`,
+      };
+
+      return reply.send(results);
     }
   });
 
@@ -1804,6 +2069,20 @@ function generateConfigHtml(): string {
       </div>
     </div>
 
+    <!-- Network Diagnostic -->
+    <div class="card" style="border-left: 4px solid #3b82f6;">
+      <div class="card-body">
+        <h2>🔍 Diagnóstico de Red</h2>
+        <p style="color:#6b7280; font-size:13px; margin-bottom:16px;">
+          Verifica que este equipo está conectado a la red correcta y puede alcanzar el PACS, Worklist y servicios cloud.
+        </p>
+        <div class="btn-group">
+          <button class="btn btn-primary" onclick="runNetworkDiagnostic()" id="btnNetDiag">🔍 Ejecutar Diagnóstico</button>
+        </div>
+        <div id="netDiagResult" style="margin-top:12px;"></div>
+      </div>
+    </div>
+
     <!-- Actions -->
     <div class="btn-group">
       <button class="btn btn-primary" onclick="saveConfig()">💾 Guardar Configuracion</button>
@@ -2152,6 +2431,81 @@ function generateConfigHtml(): string {
         URL.revokeObjectURL(url);
       } catch (e) {
         showStatus('Error descargando .env: ' + e.message, 'error');
+      }
+    }
+
+    // ============================================
+    // NETWORK DIAGNOSTIC
+    // ============================================
+    async function runNetworkDiagnostic() {
+      var btn = document.getElementById('btnNetDiag');
+      var resultDiv = document.getElementById('netDiagResult');
+      btn.disabled = true;
+      btn.textContent = '⏳ Diagnosticando...';
+      resultDiv.innerHTML = '<div class="test-result" style="background:#eff6ff;border:1px solid #93c5fd;padding:12px;border-radius:8px;">⏳ Ejecutando diagnóstico de red completo...</div>';
+
+      try {
+        var resp = await fetch('/api/config/network-diagnostic', {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' }
+        });
+        var data = await resp.json();
+
+        var html = '';
+
+        // Host info
+        html += '<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px;margin-bottom:12px;">';
+        html += '<div style="font-weight:600;font-size:14px;margin-bottom:8px;">🖥️ Equipo: ' + (data.hostname || '-') + '</div>';
+        html += '<div style="font-size:12px;color:#64748b;">' + (data.platform || '') + '</div>';
+
+        // Network interfaces
+        if (data.interfaces && data.interfaces.length > 0) {
+          html += '<div style="margin-top:8px;">';
+          data.interfaces.forEach(function(iface) {
+            html += '<div style="display:flex;align-items:center;gap:8px;padding:4px 0;font-size:13px;">';
+            html += '<span style="font-weight:500;min-width:60px;">' + iface.name + '</span>';
+            html += '<code style="background:#e0f2fe;padding:2px 6px;border-radius:4px;font-size:12px;">' + iface.ip + '</code>';
+            html += '<span style="color:#94a3b8;font-size:11px;">' + iface.netmask + '</span>';
+            html += '</div>';
+          });
+          html += '</div>';
+        } else {
+          html += '<div style="color:#ef4444;font-size:12px;margin-top:4px;">⚠️ No se detectaron interfaces de red activas</div>';
+        }
+        html += '</div>';
+
+        // Checks
+        html += '<div style="display:flex;flex-direction:column;gap:6px;">';
+        (data.checks || []).forEach(function(check) {
+          var bg = check.status === 'pass' ? '#f0fdf4' : check.status === 'fail' ? '#fef2f2' : '#fffbeb';
+          var border = check.status === 'pass' ? '#86efac' : check.status === 'fail' ? '#fca5a5' : '#fcd34d';
+          html += '<div style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:' + bg + ';border:1px solid ' + border + ';border-radius:6px;">';
+          html += '<span style="font-size:18px;">' + check.icon + '</span>';
+          html += '<div style="flex:1;">';
+          html += '<div style="font-weight:600;font-size:13px;">' + check.name + '</div>';
+          html += '<div style="font-size:12px;color:#4b5563;">' + check.detail + '</div>';
+          html += '<div style="font-size:11px;color:#9ca3af;">' + check.target + (check.latency ? ' — ' + check.latency + 'ms' : '') + '</div>';
+          html += '</div>';
+          html += '</div>';
+        });
+        html += '</div>';
+
+        // Summary
+        if (data.summary) {
+          var sumBg = data.summary.allGood ? '#f0fdf4' : '#fef2f2';
+          var sumBorder = data.summary.allGood ? '#22c55e' : '#ef4444';
+          html += '<div style="margin-top:12px;padding:12px;background:' + sumBg + ';border:2px solid ' + sumBorder + ';border-radius:8px;text-align:center;font-weight:600;font-size:14px;">';
+          html += data.summary.message;
+          html += '</div>';
+        }
+
+        resultDiv.innerHTML = html;
+      } catch (err) {
+        resultDiv.innerHTML = '<div class="test-result" style="background:#fef2f2;border:1px solid #fca5a5;padding:12px;border-radius:8px;">❌ Error ejecutando diagnóstico: ' + err.message + '</div>';
+      } finally {
+        btn.disabled = false;
+        btn.textContent = '🔍 Ejecutar Diagnóstico';
       }
     }
 

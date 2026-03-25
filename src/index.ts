@@ -4,6 +4,8 @@ import multipart from '@fastify/multipart';
 import rateLimit from '@fastify/rate-limit';
 import fs from 'fs';
 import path from 'path';
+import net from 'net';
+import os from 'os';
 import { fileURLToPath } from 'url';
 
 import { config } from './config/env.js';
@@ -170,10 +172,74 @@ async function start() {
     Ready to receive DICOM files!
     `);
 
+    // ===== Startup Network Check =====
+    await startupNetworkCheck();
+
   } catch (error) {
     console.error('\u274c Failed to start server:', error);
     process.exit(1);
   }
+}
+
+// Quick TCP check
+function tcpProbe(host: string, port: number, timeoutMs = 3000): Promise<{ ok: boolean; ms: number; err?: string }> {
+  return new Promise((resolve) => {
+    const t0 = Date.now();
+    const sock = new net.Socket();
+    sock.setTimeout(timeoutMs);
+    sock.once('connect', () => { sock.destroy(); resolve({ ok: true, ms: Date.now() - t0 }); });
+    sock.once('timeout', () => { sock.destroy(); resolve({ ok: false, ms: Date.now() - t0, err: 'timeout' }); });
+    sock.once('error', (e) => { resolve({ ok: false, ms: Date.now() - t0, err: e.message }); });
+    sock.connect(port, host);
+  });
+}
+
+async function startupNetworkCheck() {
+  console.log('    \u{1F50D} Network check...');
+
+  // Detect local IPs
+  const ifaces = os.networkInterfaces();
+  const localIps: string[] = [];
+  for (const [, addrs] of Object.entries(ifaces)) {
+    if (!addrs) continue;
+    for (const a of addrs) {
+      if (a.family === 'IPv4' && !a.internal) localIps.push(a.address);
+    }
+  }
+  console.log(`    \u{1F4E1} IPs locales: ${localIps.length > 0 ? localIps.join(', ') : 'ninguna detectada'}`);
+
+  const pacsType = config.pacsType;
+  const checks: string[] = [];
+
+  // Check HTTP PACS
+  if (pacsType !== 'dicom-native' && config.pacsUrl) {
+    try {
+      const u = new URL(config.pacsUrl);
+      const port = Number(u.port) || (u.protocol === 'https:' ? 443 : 80);
+      const r = await tcpProbe(u.hostname, port);
+      checks.push(r.ok
+        ? `    \u2705 PACS HTTP (${u.hostname}:${port}) — ${r.ms}ms`
+        : `    \u274C PACS HTTP (${u.hostname}:${port}) — ${r.err}`);
+    } catch { checks.push('    \u26A0\uFE0F PACS URL inv\u00E1lida'); }
+  }
+
+  // Check DICOM TCP
+  if (config.pacsDicomHost && config.pacsDicomHost !== '') {
+    const port = Number(config.pacsDicomPort) || 4242;
+    const r = await tcpProbe(config.pacsDicomHost, port);
+    checks.push(r.ok
+      ? `    \u2705 PACS DICOM (${config.pacsDicomHost}:${port}) — ${r.ms}ms`
+      : `    \u274C PACS DICOM (${config.pacsDicomHost}:${port}) — ${r.err}`);
+  }
+
+  // Check Internet
+  const inet = await tcpProbe('8.8.8.8', 53, 2000);
+  checks.push(inet.ok
+    ? `    \u2705 Internet — ${inet.ms}ms`
+    : `    \u26A0\uFE0F Sin Internet`);
+
+  checks.forEach(c => console.log(c));
+  console.log('');
 }
 
 start();
