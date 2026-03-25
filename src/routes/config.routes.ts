@@ -1934,7 +1934,7 @@ function generateConfigHtml(): string {
           </div>
           <div class="form-group">
             <label>AE Title del Gateway</label>
-            <input type="text" id="gatewayAeTitle" value="${currentConfig.gatewayAeTitle}" placeholder="ANDEX_1" maxlength="16" style="text-transform:uppercase;">
+            <input type="text" id="gatewayAeTitle" value="${currentConfig.gatewayAeTitle}" placeholder="ANDEX_1" maxlength="16">
             <small>Nombre DICOM del Gateway en la red (aplica a DICOMweb y DICOM Nativo)</small>
           </div>
         </div>
@@ -2078,7 +2078,7 @@ function generateConfigHtml(): string {
             </div>
             <div class="form-group">
               <label>PACS AE Title (Called AET)</label>
-              <input type="text" id="pacsAeTitle" value="${currentConfig.pacsAeTitle}" placeholder="SYNAPSE" maxlength="16" style="text-transform:uppercase;">
+              <input type="text" id="pacsAeTitle" value="${currentConfig.pacsAeTitle}" placeholder="SYNAPSE" maxlength="16">
               <small>AE Title del PACS destino</small>
             </div>
           </div>
