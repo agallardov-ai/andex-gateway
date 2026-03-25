@@ -9,6 +9,7 @@ import fs from 'fs';
 import path from 'path';
 import net from 'net';
 import os from 'os';
+import { execFile } from 'child_process';
 import { config, supabaseConfig } from '../config/env.js';
 import { dashboardAuth } from '../plugins/auth.plugin.js';
 import { queryWorklist, getWorklistConfig, configureWorklist } from '../services/worklist.service.js';
@@ -589,6 +590,70 @@ export async function configRoutes(fastify: FastifyInstance): Promise<void> {
       };
 
       return reply.send(results);
+    }
+  });
+
+  // POST /api/config/update-gateway - Pull latest image & recreate
+  fastify.post('/api/config/update-gateway', {
+    preHandler: dashboardAuth,
+    handler: async (_request: FastifyRequest, reply: FastifyReply) => {
+      const cwd = process.env.COMPOSE_DIR || process.cwd();
+
+      // Check if docker CLI is available
+      const dockerOk = await new Promise<boolean>((resolve) => {
+        execFile('docker', ['--version'], (err) => resolve(!err));
+      });
+      if (!dockerOk) {
+        return reply.code(500).send({
+          ok: false,
+          error: 'Docker CLI no disponible en este entorno',
+          manual: 'Ejecute manualmente: docker compose pull gateway && docker compose up -d gateway',
+        });
+      }
+
+      // Check compose file exists
+      const composeFile = ['docker-compose.yml', 'docker-compose.yaml', 'compose.yml', 'compose.yaml']
+        .map(f => path.join(cwd, f))
+        .find(f => fs.existsSync(f));
+      if (!composeFile) {
+        return reply.code(500).send({
+          ok: false,
+          error: `No se encontró docker-compose.yml en ${cwd}`,
+          manual: 'Ejecute manualmente: docker compose pull gateway && docker compose up -d gateway',
+        });
+      }
+
+      // Run docker compose pull
+      const runCmd = (cmd: string, args: string[]): Promise<{ ok: boolean; stdout: string; stderr: string }> =>
+        new Promise((resolve) => {
+          execFile(cmd, args, { cwd, timeout: 120_000 }, (err, stdout, stderr) => {
+            resolve({ ok: !err, stdout: stdout?.toString() || '', stderr: stderr?.toString() || '' });
+          });
+        });
+
+      const pull = await runCmd('docker', ['compose', 'pull', 'gateway']);
+      if (!pull.ok) {
+        return reply.code(500).send({
+          ok: false,
+          step: 'pull',
+          error: 'Error al descargar imagen',
+          detail: pull.stderr || pull.stdout,
+          manual: 'docker compose pull gateway',
+        });
+      }
+
+      // Run docker compose up -d gateway (this will restart ourselves)
+      const up = await runCmd('docker', ['compose', 'up', '-d', '--force-recreate', 'gateway']);
+
+      // If we get here, the container hasn't been replaced yet (or we're running outside Docker)
+      return reply.send({
+        ok: true,
+        pull: { stdout: pull.stdout.trim(), stderr: pull.stderr.trim() },
+        up: { ok: up.ok, stdout: up.stdout.trim(), stderr: up.stderr.trim() },
+        message: up.ok
+          ? '✅ Gateway actualizado — el contenedor se está recreando'
+          : '⚠️ Imagen descargada pero el contenedor no se pudo recrear. Ejecute: docker compose up -d gateway',
+      });
     }
   });
 
@@ -2083,6 +2148,20 @@ function generateConfigHtml(): string {
       </div>
     </div>
 
+    <!-- Update Gateway -->
+    <div class="card">
+      <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+        <div>
+          <h2>🔄 Actualizar Gateway</h2>
+          <p style="font-size:0.85rem; color:#94a3b8; margin:0;">Descargar la última imagen Docker y recrear el contenedor</p>
+        </div>
+        <div style="display:flex; gap:8px; align-items:center;">
+          <button class="btn btn-primary" onclick="updateGateway()" id="btnUpdate">🔄 Actualizar</button>
+        </div>
+      </div>
+      <div id="updateResult" style="margin-top:12px;"></div>
+    </div>
+
     <!-- Actions -->
     <div class="btn-group">
       <button class="btn btn-primary" onclick="saveConfig()">💾 Guardar Configuracion</button>
@@ -2506,6 +2585,45 @@ function generateConfigHtml(): string {
       } finally {
         btn.disabled = false;
         btn.textContent = '🔍 Ejecutar Diagnóstico';
+      }
+    }
+
+    async function updateGateway() {
+      var btn = document.getElementById('btnUpdate');
+      var resultDiv = document.getElementById('updateResult');
+      btn.disabled = true;
+      btn.textContent = '⏳ Descargando imagen...';
+      resultDiv.innerHTML = '<div style="padding:8px;color:#94a3b8;">Ejecutando docker compose pull + up... esto puede tardar hasta 2 minutos.</div>';
+      try {
+        var resp = await fetch('/api/config/update-gateway', {
+          method: 'POST',
+          credentials: 'include'
+        });
+        var data = await resp.json();
+        if (data.ok) {
+          resultDiv.innerHTML = '<div class="test-result" style="background:#f0fdf4;border:1px solid #86efac;padding:12px;border-radius:8px;">'
+            + '<div style="font-weight:700;margin-bottom:6px;">✅ ' + (data.message || 'Actualizado') + '</div>'
+            + (data.pull && data.pull.stderr ? '<pre style="font-size:0.75rem;white-space:pre-wrap;color:#64748b;margin:6px 0;">' + data.pull.stderr + '</pre>' : '')
+            + (data.up && data.up.stderr ? '<pre style="font-size:0.75rem;white-space:pre-wrap;color:#64748b;margin:6px 0;">' + data.up.stderr + '</pre>' : '')
+            + '<div style="font-size:0.8rem;color:#64748b;margin-top:8px;">💡 Si el Gateway se recreó, esta página se desconectará brevemente. Recargue en unos segundos.</div>'
+            + '</div>';
+          setTimeout(function() { location.reload(); }, 8000);
+        } else {
+          resultDiv.innerHTML = '<div class="test-result" style="background:#fef2f2;border:1px solid #fca5a5;padding:12px;border-radius:8px;">'
+            + '<div style="font-weight:700;margin-bottom:6px;">❌ ' + (data.error || 'Error') + '</div>'
+            + (data.detail ? '<pre style="font-size:0.75rem;white-space:pre-wrap;color:#94a3b8;margin:6px 0;">' + data.detail + '</pre>' : '')
+            + (data.manual ? '<div style="margin-top:8px;font-size:0.85rem;">📋 Comando manual: <code>' + data.manual + '</code></div>' : '')
+            + '</div>';
+        }
+      } catch (err) {
+        resultDiv.innerHTML = '<div class="test-result" style="background:#fffbeb;border:1px solid #fcd34d;padding:12px;border-radius:8px;">'
+          + '<div style="font-weight:700;margin-bottom:6px;">🔄 Gateway se está reiniciando...</div>'
+          + '<div style="font-size:0.85rem;color:#64748b;">La conexión se perdió, probablemente porque el contenedor se está recreando. Espere unos segundos y recargue la página.</div>'
+          + '</div>';
+        setTimeout(function() { location.reload(); }, 10000);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = '🔄 Actualizar';
       }
     }
 

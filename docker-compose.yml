@@ -66,6 +66,7 @@ services:
     volumes:
       - gateway-data:/app/data
       - ./certs:/app/certs:ro    # TLS certs (opcional, si no existe HTTPS se desactiva)
+      - /var/run/docker.sock:/var/run/docker.sock  # Para auto-actualización desde dashboard
     depends_on:
       orthanc:
         condition: service_healthy
