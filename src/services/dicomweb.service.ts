@@ -115,7 +115,7 @@ export async function uploadViaDicomweb(filepath: string): Promise<{
       method: 'POST',
       headers: {
         ...getAuthHeader(),
-        'Content-Type': `multipart/related; type="application/dicom"; boundary=${boundary}`,
+        'Content-Type': `multipart/related; type="application/dicom"; boundary="${boundary}"`,
         'Accept': 'application/dicom+json',
       },
       body: body,

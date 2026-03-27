@@ -1,14 +1,14 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { config } from '../config/env.js';
 import { getJobs, getJobStats } from '../db/database.js';
-import { checkOrthancHealth } from '../services/orthanc.service.js';
+import { checkPacsHealth } from '../services/pacs.service.js';
 
 export async function uiRoutes(fastify: FastifyInstance): Promise<void> {
 
   // Dashboard HTML (public — no auth required)
   fastify.get('/', {
     handler: async (request: FastifyRequest, reply: FastifyReply) => {
-      const orthancStatus = await checkOrthancHealth();
+      const orthancStatus = await checkPacsHealth();
       const stats = getJobStats();
       const recentJobs = getJobs({ limit: 20 });
 
@@ -31,7 +31,7 @@ export async function uiRoutes(fastify: FastifyInstance): Promise<void> {
   // Dashboard API (for AJAX refresh, public)
   fastify.get('/dashboard/data', {
     handler: async (_request: FastifyRequest, reply: FastifyReply) => {
-      const orthancStatus = await checkOrthancHealth();
+      const orthancStatus = await checkPacsHealth();
       const stats = getJobStats();
       const recentJobs = getJobs({ limit: 20 });
 

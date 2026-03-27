@@ -26,7 +26,9 @@ export async function dashboardAuth(request: FastifyRequest, reply: FastifyReply
 
   const base64Credentials = authHeader.split(' ')[1];
   const credentials = Buffer.from(base64Credentials, 'base64').toString('utf-8');
-  const [username, password] = credentials.split(':');
+  const colonIdx = credentials.indexOf(':');
+  const username = colonIdx > -1 ? credentials.substring(0, colonIdx) : credentials;
+  const password = colonIdx > -1 ? credentials.substring(colonIdx + 1) : '';
 
   if (username !== config.dashboardUser || password !== config.dashboardPassword) {
     reply.header('WWW-Authenticate', 'Basic realm="Andex Gateway Dashboard"');

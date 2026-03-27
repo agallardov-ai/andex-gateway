@@ -258,10 +258,16 @@ function getLogFilePath(): string {
 }
 
 // Write log to file
+let logDirEnsured = false;
 function writeLogToFile(entry: LogEntry): void {
   try {
+    const logPath = getLogFilePath();
+    if (!logDirEnsured) {
+      fs.mkdirSync(path.dirname(logPath), { recursive: true });
+      logDirEnsured = true;
+    }
     const logLine = JSON.stringify(entry) + '\n';
-    fs.appendFileSync(getLogFilePath(), logLine);
+    fs.appendFileSync(logPath, logLine);
   } catch (error) {
     // Silently fail file logging to avoid infinite loops
   }

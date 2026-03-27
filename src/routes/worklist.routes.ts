@@ -76,8 +76,8 @@ export async function worklistRoutes(fastify: FastifyInstance): Promise<void> {
         if (modality) query.modality = modality;
         if (accessionNumber) query.accessionNumber = accessionNumber;
         if (stationAET) query.stationAET = stationAET;
-        if (limit) query.limit = parseInt(limit, 10);
-        if (offset) query.offset = parseInt(offset, 10);
+        if (limit) { const n = parseInt(limit, 10); if (!isNaN(n) && n > 0) query.limit = n; }
+        if (offset) { const n = parseInt(offset, 10); if (!isNaN(n) && n >= 0) query.offset = n; }
         
         log('info', 'Consultando Worklist', { query });
         

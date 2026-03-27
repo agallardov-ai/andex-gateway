@@ -67,19 +67,22 @@ async function sendHeartbeat(): Promise<void> {
     };
 
     // Quick PACS connectivity check
-    try {
+    {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 5000);
-      const pacsResp = await fetch(`${config.pacsBaseUrl}/`, {
-        signal: controller.signal,
-        headers: config.pacsAuthType === 'basic' && config.pacsUsername
-          ? { 'Authorization': 'Basic ' + Buffer.from(`${config.pacsUsername}:${config.pacsPassword}`).toString('base64') }
-          : {}
-      });
-      clearTimeout(timeout);
-      heartbeat.pacs_connected = pacsResp.ok || pacsResp.status === 401; // 401 = auth works, PACS is up
-    } catch {
-      heartbeat.pacs_connected = false;
+      try {
+        const pacsResp = await fetch(`${config.pacsBaseUrl}/`, {
+          signal: controller.signal,
+          headers: config.pacsAuthType === 'basic' && config.pacsUsername
+            ? { 'Authorization': 'Basic ' + Buffer.from(`${config.pacsUsername}:${config.pacsPassword}`).toString('base64') }
+            : {}
+        });
+        heartbeat.pacs_connected = pacsResp.ok || pacsResp.status === 401; // 401 = auth works, PACS is up
+      } catch {
+        heartbeat.pacs_connected = false;
+      } finally {
+        clearTimeout(timeout);
+      }
     }
 
     const { error } = await supabase
@@ -141,16 +144,15 @@ async function executeCommand(cmd: any): Promise<void> {
   try {
     switch (cmd.command) {
       case 'check-pacs': {
-        try {
           const controller = new AbortController();
           const timeout = setTimeout(() => controller.abort(), 10000);
+        try {
           const resp = await fetch(`${config.pacsBaseUrl}/`, {
             signal: controller.signal,
             headers: config.pacsAuthType === 'basic' && config.pacsUsername
               ? { 'Authorization': 'Basic ' + Buffer.from(`${config.pacsUsername}:${config.pacsPassword}`).toString('base64') }
               : {}
           });
-          clearTimeout(timeout);
           result = {
             connected: resp.ok || resp.status === 401,
             status: resp.status,
@@ -159,6 +161,8 @@ async function executeCommand(cmd: any): Promise<void> {
           };
         } catch (e) {
           result = { connected: false, error: String(e) };
+        } finally {
+          clearTimeout(timeout);
         }
         break;
       }

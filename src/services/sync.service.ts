@@ -329,6 +329,12 @@ async function detectCancelledItems(
   currentAccessions: Set<string>,
   result: SyncResult
 ): Promise<void> {
+  // Guard: si el worklist vino vacio, no cancelar (puede ser error de red)
+  if (currentAccessions.size === 0) {
+    log('warn', 'Worklist vacio - omitiendo deteccion de cancelaciones para evitar falsos positivos');
+    return;
+  }
+
   // Obtener todas las citas de hoy con source='pacs'
   const todayPacsAgenda = await getTodayPacsAgenda();
 
