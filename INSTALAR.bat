@@ -5,7 +5,11 @@ color 0A
 
 echo.
 echo  ╔═══════════════════════════════════════════════╗
-echo  ║      ANDEX GATEWAY - INSTALADOR v1.0          ║
+echo  ║      ANDEX GATEWAY - INSTALADOR v2.0          ║
+echo  ║                                                ║
+echo  ║      No necesita Git ni Node.js                ║
+echo  ║      Solo necesita Docker Desktop              ║
+echo  ║                                                ║
 echo  ║      Primera vez: instala todo                 ║
 echo  ║      Ya instalado: actualiza                   ║
 echo  ╚═══════════════════════════════════════════════╝
@@ -33,78 +37,69 @@ if %errorlevel% neq 0 (
 echo  [OK] Docker detectado
 echo.
 
-:: ── Definir carpeta de instalación ──
+:: ── Variables ──
 set "INSTALL_DIR=C:\AndexGateway"
+set "REPO_URL=https://github.com/agallardov-ai/andex-gateway/archive/refs/heads/main.zip"
+set "ZIP_FILE=%TEMP%\andex-gateway-main.zip"
+set "EXTRACT_DIR=%TEMP%\andex-gateway-main"
 
-:: ── Verificar si ya existe instalación ──
-if exist "%INSTALL_DIR%\src\index.ts" (
-    echo  [INFO] Instalacion existente detectada en %INSTALL_DIR%
-    echo  Actualizando...
-    echo.
-    goto :ACTUALIZAR
+:: ── Guardar .env si existe ──
+if exist "%INSTALL_DIR%\.env" (
+    echo  [INFO] Guardando configuracion .env existente...
+    copy "%INSTALL_DIR%\.env" "%TEMP%\andex-env-backup.txt" >nul
 )
 
 :: ══════════════════════════════════════
-:: PRIMERA INSTALACIÓN
+:: DESCARGAR CODIGO DESDE GITHUB
 :: ══════════════════════════════════════
-echo  ── PRIMERA INSTALACION ──
-echo.
-
-:: Verificar git
-where git >nul 2>&1
+echo  [1/4] Descargando ultima version desde GitHub...
+powershell -Command "try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -Uri '%REPO_URL%' -OutFile '%ZIP_FILE%' -UseBasicParsing } catch { Write-Host 'ERROR: No se pudo descargar'; exit 1 }"
 if %errorlevel% neq 0 (
-    echo  [ERROR] Git no esta instalado.
-    echo  Descargalo de: https://git-scm.com/download/win
-    echo.
+    echo  [ERROR] No se pudo descargar. Verifica tu conexion a internet.
+    pause
+    exit /b 1
+)
+echo  [OK] Descargado
+
+:: ── Descomprimir ──
+echo  [2/4] Descomprimiendo...
+if exist "%EXTRACT_DIR%" rmdir /s /q "%EXTRACT_DIR%" >nul 2>&1
+powershell -Command "Expand-Archive -Path '%ZIP_FILE%' -DestinationPath '%TEMP%' -Force"
+if %errorlevel% neq 0 (
+    echo  [ERROR] No se pudo descomprimir.
     pause
     exit /b 1
 )
 
-:: Crear carpeta si no existe
+:: ── Detener gateway si esta corriendo ──
+docker-compose -f "%INSTALL_DIR%\docker-compose.yml" down >nul 2>&1
+
+:: ── Crear carpeta destino ──
 if not exist "%INSTALL_DIR%" mkdir "%INSTALL_DIR%"
 
-:: Guardar .env si existe
-if exist "%INSTALL_DIR%\.env" (
-    echo  [INFO] Guardando .env existente...
-    copy "%INSTALL_DIR%\.env" "%INSTALL_DIR%\.env.backup" >nul
+:: ── Copiar archivos (sobrescribe todo excepto .env) ──
+echo  [3/4] Instalando archivos...
+xcopy "%EXTRACT_DIR%\*" "%INSTALL_DIR%\" /E /Y /Q >nul 2>&1
+
+:: ── Limpiar temporales ──
+del "%ZIP_FILE%" >nul 2>&1
+rmdir /s /q "%EXTRACT_DIR%" >nul 2>&1
+
+:: ── Restaurar .env si habia backup ──
+if exist "%TEMP%\andex-env-backup.txt" (
+    echo  [INFO] Restaurando configuracion .env...
+    copy "%TEMP%\andex-env-backup.txt" "%INSTALL_DIR%\.env" >nul
+    del "%TEMP%\andex-env-backup.txt" >nul
 )
 
-:: Clonar repositorio
-echo  [1/4] Clonando repositorio...
-cd /d "%INSTALL_DIR%"
-
-:: Si ya hay archivos, inicializar git y hacer pull
-if exist "%INSTALL_DIR%\docker-compose.yml" (
-    echo  [INFO] Carpeta tiene archivos previos, inicializando git...
-    git init >nul 2>&1
-    git remote add origin https://github.com/agallardov-ai/andex-gateway.git >nul 2>&1
-    git fetch origin >nul 2>&1
-    git checkout -f main >nul 2>&1
-    git reset --hard origin/main >nul 2>&1
-) else (
-    git clone https://github.com/agallardov-ai/andex-gateway.git . 2>&1
-    if %errorlevel% neq 0 (
-        echo  [ERROR] No se pudo clonar. Verifica tu conexion a internet.
-        pause
-        exit /b 1
-    )
-)
-
-:: Restaurar .env si habia backup
-if exist "%INSTALL_DIR%\.env.backup" (
-    echo  [INFO] Restaurando .env...
-    copy "%INSTALL_DIR%\.env.backup" "%INSTALL_DIR%\.env" >nul
-    del "%INSTALL_DIR%\.env.backup"
-)
-
-:: Crear .env si no existe
+:: ── Crear .env si no existe ──
 if not exist "%INSTALL_DIR%\.env" (
-    echo  [2/4] Creando archivo de configuracion .env ...
     echo.
-    echo  IMPORTANTE: Debes editar .env con los datos de tu centro.
+    echo  IMPORTANTE: Se creara .env con valores por defecto.
+    echo  Debes editarlo con los datos de tu centro.
     echo.
     (
-        echo # ═══ ANDEX GATEWAY - CONFIGURACION ═══
+        echo # === ANDEX GATEWAY - CONFIGURACION ===
         echo.
         echo # Identidad del centro
         echo CENTRO_NOMBRE=Mi Hospital
@@ -135,38 +130,17 @@ if not exist "%INSTALL_DIR%\.env" (
         echo WORKLIST_SYNC_INTERVAL_MS=30000
         echo WORKLIST_DEFAULT_MODALITY=ES
         echo.
-        echo # Supabase ^(opcional^)
+        echo # Supabase
         echo SUPABASE_URL=
         echo SUPABASE_SERVICE_KEY=
     ) > "%INSTALL_DIR%\.env"
-    echo  [OK] .env creado. Editalo antes de iniciar.
-) else (
-    echo  [2/4] .env existente conservado
+    echo  [OK] .env creado con valores por defecto.
 )
 
-echo  [3/4] Construyendo imagen Docker...
-goto :BUILD
-
 :: ══════════════════════════════════════
-:: ACTUALIZACIÓN
+:: CONSTRUIR Y LEVANTAR
 :: ══════════════════════════════════════
-:ACTUALIZAR
-cd /d "%INSTALL_DIR%"
-
-echo  [1/3] Descargando actualizacion...
-git pull origin main 2>&1
-if %errorlevel% neq 0 (
-    echo  [WARN] git pull fallo, forzando actualizacion...
-    git fetch origin >nul 2>&1
-    git reset --hard origin/main 2>&1
-)
-
-echo  [2/3] Deteniendo gateway actual...
-docker-compose down >nul 2>&1
-
-echo  [3/3] Reconstruyendo imagen Docker...
-
-:BUILD
+echo  [4/4] Construyendo imagen Docker (puede tardar 1-2 min)...
 cd /d "%INSTALL_DIR%"
 docker-compose build --no-cache 2>&1
 if %errorlevel% neq 0 (
@@ -183,7 +157,7 @@ docker-compose up -d 2>&1
 :: Esperar a que arranque
 echo.
 echo  Esperando que el gateway inicie...
-timeout /t 10 /nobreak >nul
+timeout /t 15 /nobreak >nul
 
 :: Verificar salud
 docker exec andex-gateway wget -q -O- http://localhost:3001/health >nul 2>&1
@@ -203,8 +177,8 @@ if %errorlevel% equ 0 (
 )
 
 echo.
-echo  Para ver logs:  docker-compose logs -f
-echo  Para detener:   docker-compose down
-echo  Para actualizar: ejecuta este script de nuevo
+echo  Para ver logs:     docker-compose logs -f
+echo  Para detener:      docker-compose down
+echo  Para actualizar:   ejecuta este script de nuevo
 echo.
 pause
