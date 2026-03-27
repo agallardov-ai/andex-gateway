@@ -10,6 +10,8 @@
  */
 
 import { config } from '../config/env.js';
+import { nativeCFindMWL, toDicomDate } from './dicom-native.service.js';
+import { configStore } from '../config/config-store.js';
 import { generateMockWorklist, filterMockWorklist, getMockWorklistItem } from './worklist-mock.service.js';
 
 // =====================================================
@@ -427,7 +429,7 @@ export async function queryWorklist(query: WorklistQuery = {}): Promise<{
   items: WorklistItem[];
   total?: number;
   error?: string;
-  source?: 'ups-rs' | 'qido-mwl' | 'mock';
+  source?: 'ups-rs' | 'qido-mwl' | 'dicom-native' | 'mock';
 }> {
   // ===== MODO MOCK PARA DESARROLLO =====
   if (config.worklistMode === 'mock') {
@@ -442,7 +444,12 @@ export async function queryWorklist(query: WorklistQuery = {}): Promise<{
     };
   }
   
-  // ===== MODO PACS (producción) =====
+  // ===== MODO DICOM NATIVO (C-FIND MWL sobre TCP) =====
+  if (config.pacsType === 'dicom-native') {
+    return await queryNativeMwl(query);
+  }
+
+  // ===== MODO PACS DICOMweb (producción) =====
   try {
     // Intentar UPS-RS primero si está configurado
     if (worklistConfig.preferUps) {
@@ -602,6 +609,95 @@ export async function updateWorkitemState(
     console.error(`❌ Error actualizando workitem: ${message}`);
     return { success: false, error: message };
   }
+}
+
+/**
+ * Consulta Worklist via DICOM Nativo (C-FIND MWL sobre TCP)
+ */
+async function queryNativeMwl(query: WorklistQuery): Promise<{
+  success: boolean;
+  items: WorklistItem[];
+  total?: number;
+  error?: string;
+  source: 'dicom-native';
+}> {
+  const s = configStore.getAll();
+  const host = (s.pacsDicomHost || config.pacsDicomHost) as string;
+  const port = (s.pacsDicomPort || config.pacsDicomPort) as number;
+  const calledAeTitle = (s.pacsAeTitle || config.pacsAeTitle) as string;
+  const callingAeTitle = (s.gatewayAeTitle || config.gatewayAeTitle) as string;
+
+  if (!host || !calledAeTitle) {
+    return {
+      success: false,
+      items: [],
+      error: 'DICOM Nativo: host o AE Title del PACS no configurado',
+      source: 'dicom-native',
+    };
+  }
+
+  // Convertir fecha a formato DICOM (YYYYMMDD)
+  let dateFilter: string | undefined;
+  if (query.date) {
+    dateFilter = query.date.replace(/-/g, '').slice(0, 8);
+  } else {
+    // Por defecto: hoy
+    dateFilter = toDicomDate(new Date().toISOString().slice(0, 10));
+  }
+
+  const result = await nativeCFindMWL(
+    { host, port, callingAeTitle, calledAeTitle, timeout: 15000 },
+    {
+      date: dateFilter,
+      patientID: query.patientID,
+      patientName: query.patientName,
+      modality: query.modality || config.worklistDefaultModality,
+      accessionNumber: query.accessionNumber,
+      scheduledStationAET: query.stationAET || config.worklistStationAET || undefined,
+    }
+  );
+
+  if (!result.success) {
+    console.error('Error C-FIND MWL nativo:', result.error);
+    return {
+      success: false,
+      items: [],
+      error: result.error,
+      source: 'dicom-native',
+    };
+  }
+
+  // Mapear MwlItem[] a WorklistItem[]
+  const items: WorklistItem[] = result.items.map((mwl) => ({
+    accessionNumber: mwl.accessionNumber,
+    studyInstanceUID: mwl.studyInstanceUID || undefined,
+    scheduledProcedureStepID: mwl.scheduledProcedureStepID,
+    requestedProcedureID: mwl.requestedProcedureID,
+    patientID: mwl.patientID,
+    patientName: mwl.patientName,
+    patientBirthDate: mwl.patientBirthDate || undefined,
+    patientSex: mwl.patientSex || undefined,
+    scheduledDateTime: mwl.scheduledDateTime,
+    modality: mwl.modality,
+    scheduledStationAET: mwl.scheduledStationAET || undefined,
+    scheduledStationName: mwl.scheduledStationName || undefined,
+    scheduledProcedureDescription: mwl.scheduledProcedureDescription,
+    requestedProcedureDescription: mwl.requestedProcedureDescription || undefined,
+    referringPhysicianName: mwl.referringPhysicianName || undefined,
+    scheduledPerformingPhysician: mwl.scheduledPerformingPhysician || undefined,
+    institutionName: mwl.institutionName || undefined,
+    departmentName: mwl.departmentName || undefined,
+    procedureStepState: mwl.procedureStepState,
+  }));
+
+  console.log(`C-FIND MWL nativo: ${items.length} items (${result.latencyMs}ms)`);
+
+  return {
+    success: true,
+    items,
+    total: items.length,
+    source: 'dicom-native',
+  };
 }
 
 /**

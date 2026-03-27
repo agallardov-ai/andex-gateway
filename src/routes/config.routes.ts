@@ -1542,18 +1542,19 @@ export async function configRoutes(fastify: FastifyInstance): Promise<void> {
           } else if (pacsType === 'dicom-native') {
             diag = {
               code: 'GW-WL-002',
-              severity: 'warning',
-              title: 'Worklist HTTP No Aplica — Tipo DICOM Nativo',
-              detail: `El worklist HTTP (UPS-RS/MWL) no aplica para DICOM Nativo. La MWL se consulta por C-FIND (TCP).`,
+              severity: 'info',
+              title: 'Worklist DICOM Nativo (C-FIND MWL)',
+              detail: `El worklist para DICOM Nativo usa C-FIND MWL sobre TCP (no HTTP). Asegúrese de que el PACS esté configurado para responder consultas MWL.`,
               causes: [
-                'El tipo DICOM Nativo usa C-FIND para consultar la Modality Worklist, no endpoints HTTP',
-                'El Gateway actualmente no implementa C-FIND MWL sobre TCP',
+                'El tipo DICOM Nativo usa C-FIND para consultar la Modality Worklist sobre TCP',
+                'El test de worklist HTTP no aplica para este modo',
               ],
               fixes: [
-                'Si su PACS también expone worklist via HTTP: configure el tipo como "DICOMweb" o "Orthanc"',
-                'Consulte si su PACS tiene API REST además de DICOM nativo',
+                'Use el botón "Test C-ECHO" para verificar la conectividad DICOM',
+                'La worklist se consultará automáticamente via C-FIND MWL al usar la API /api/worklist',
+                'Verifique que el AE Title del Gateway esté registrado en el PACS para consultas MWL',
               ],
-              technical: { pacsType, pacsLabel: label, protocol: 'C-FIND (TCP) vs UPS-RS/MWL (HTTP)', timestamp: new Date().toISOString() },
+              technical: { pacsType, pacsLabel: label, protocol: 'C-FIND MWL (TCP/DIMSE via dcmjs-dimse)', timestamp: new Date().toISOString() },
             };
           } else if (result.source === 'mock') {
             diag = {
@@ -1656,54 +1657,42 @@ export async function configRoutes(fastify: FastifyInstance): Promise<void> {
       }
       
       try {
-        const startTime = Date.now();
-        const net = await import('net');
-        const result = await new Promise<{success: boolean; error?: string}>((resolve) => {
-          const socket = new net.default.Socket();
-          const timeout = setTimeout(() => {
-            socket.destroy();
-            resolve({ success: false, error: `Timeout conectando a ${host}:${port} (>5s) — el puerto no responde` });
-          }, 5000);
-          
-          socket.connect(port, host, () => {
-            clearTimeout(timeout);
-            socket.destroy();
-            resolve({ success: true });
-          });
-          
-          socket.on('error', (err: Error) => {
-            clearTimeout(timeout);
-            resolve({ success: false, error: err.message });
-          });
+        const { nativeCEcho } = await import('../services/dicom-native.service.js');
+        const result = await nativeCEcho({
+          host,
+          port,
+          callingAeTitle: callingAet || 'ANDEX01',
+          calledAeTitle: calledAet,
+          timeout: 10000,
         });
         
-        const latency = Date.now() - startTime;
+        const latency = result.latencyMs;
         
         if (result.success) {
           const diag: DiagnosticResult = {
-            code: 'GW-OK-TCP',
+            code: 'GW-OK-CECHO',
             severity: 'info',
-            title: 'Conexión TCP Exitosa',
-            detail: `El puerto ${port} está abierto y acepta conexiones en ${host}. Latencia: ${latency}ms.`,
+            title: 'C-ECHO DICOM Exitoso',
+            detail: `C-ECHO DICOM exitoso contra ${host}:${port}. Asociación DICOM establecida y verificada. Latencia: ${latency}ms.`,
             causes: [],
             fixes: [
-              '✅ La conexión TCP es exitosa. Asegúrese de que:',
-              `El AE Title "${callingAet}" (Gateway) esté registrado/permitido en la configuración del PACS`,
-              `El AE Title "${calledAet}" sea correcto para el PACS destino`,
-              'Para test completo de A-ASSOCIATE: envíe un C-ECHO real con herramientas DICOM (echoscu, storescu)',
+              '✅ C-ECHO exitoso. La asociación DICOM está funcionando correctamente.',
+              `AE Title local: "${callingAet}" → AE Title PACS: "${calledAet}"`,
+              'El PACS acepta y responde a operaciones DICOM desde este Gateway.',
+              'Ya puede usar C-FIND MWL (Worklist) y C-STORE desde el Gateway.',
             ],
             technical: {
               host, port: String(port),
               callingAet: callingAet || '-', calledAet: calledAet || '-',
-              latency: `${latency}ms`, protocol: 'TCP',
+              latency: `${latency}ms`, protocol: 'DICOM DIMSE (A-ASSOCIATE + C-ECHO)',
               pacsType: 'dicom-native', pacsLabel: 'DICOM Nativo (TCP)',
-              note: 'TCP connect exitoso. El PACS acepta conexiones. Para validación DICOM completa, registre los AE Titles mutuamente.',
+              note: 'C-ECHO real exitoso via dcmjs-dimse. Asociación DICOM verificada.',
               timestamp: new Date().toISOString(),
             },
           };
           return reply.send({
             success: true,
-            message: `✅ TCP OK — Puerto ${port} accesible en ${host} (${latency}ms)`,
+            message: `✅ C-ECHO OK — Asociación DICOM verificada con ${calledAet}@${host}:${port} (${latency}ms)`,
             diagnostic: diag,
             pacsType: 'dicom-native',
             pacsTypeLabel: getPacsTypeLabel('dicom-native'),

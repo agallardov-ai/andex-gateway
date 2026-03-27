@@ -117,7 +117,7 @@ export interface WorklistPaths {
 
 export interface GatewayConfig {
   pacsUrl: string;
-  pacsType: 'orthanc' | 'dicomweb';
+  pacsType: 'orthanc' | 'dicomweb' | 'dicom-native';
   dicomweb?: DicomWebPaths;
   worklist?: WorklistPaths;
 }
