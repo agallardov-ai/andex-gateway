@@ -9,11 +9,13 @@
  */
 
 // dcmjs-dimse es CommonJS, usamos import dinamico
+// En produccion (node dist/), el modulo CJS queda en .default
 let _dcmjsDimse: any = null;
 
 async function getDcmjsDimse() {
   if (!_dcmjsDimse) {
-    _dcmjsDimse = await import('dcmjs-dimse');
+    const mod = await import('dcmjs-dimse');
+    _dcmjsDimse = mod.default || mod;
   }
   return _dcmjsDimse;
 }
