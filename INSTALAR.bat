@@ -168,7 +168,7 @@ timeout /t 10 /nobreak >nul
 :: ══════════════════════════════════════
 echo.
 echo  [SSL] Configurando certificado HTTPS de confianza...
-docker cp andex-gateway:/app/certs/localhost+2.pem "%INSTALL_DIR%\andex-cert.pem" >nul 2>&1
+docker cp andex-gateway:/app/data/certs/localhost+2.pem "%INSTALL_DIR%\andex-cert.pem" >nul 2>&1
 if %errorlevel% equ 0 (
     echo  [SSL] Certificado extraido del container
     :: Importar al trust store de Windows (requiere admin)

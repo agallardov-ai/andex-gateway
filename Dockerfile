@@ -31,12 +31,8 @@ COPY src/db/schema.sql ./dist/db/
 # Create data and certs directories
 RUN mkdir -p /app/data /app/certs
 
-# Generate self-signed certificates
-RUN openssl req -x509 -newkey rsa:2048 -nodes \
-      -keyout /app/certs/localhost+2-key.pem \
-      -out /app/certs/localhost+2.pem \
-      -days 825 -subj "/CN=localhost/O=Andex Gateway" \
-      -addext "subjectAltName=DNS:localhost,IP:127.0.0.1,IP:::1"
+# Certs are generated at first startup and persisted in the data volume
+# No cert generation here -- they persist across image updates
 
 # Environment
 ENV NODE_ENV=production

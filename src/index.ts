@@ -47,21 +47,53 @@ function generateSelfSignedCerts(certsDir: string): void {
 }
 
 function findTlsCerts(): { key: string; cert: string } | null {
-  const certsDir = path.join(PROJECT_ROOT, 'certs');
+  // Priority: persistent volume (survives image updates) > image-baked certs
+  const dataCertsDir = path.join(config.storagePath || process.env.STORAGE_PATH || './data', 'certs');
+  const imageCertsDir = path.join(PROJECT_ROOT, 'certs');
 
-  // Si no hay directorio o no hay certs, intentar generar
-  if (!fs.existsSync(certsDir)) {
-    generateSelfSignedCerts(certsDir);
-  } else {
-    const files = fs.readdirSync(certsDir);
+  // 1. Check persistent volume first (data/certs/)
+  let certsDir = dataCertsDir;
+  let hasCerts = false;
+
+  if (fs.existsSync(dataCertsDir)) {
+    const files = fs.readdirSync(dataCertsDir);
     const hasKey = files.some(f => f.endsWith('-key.pem'));
     const hasCert = files.some(f => f.endsWith('.pem') && !f.endsWith('-key.pem'));
-    if (!hasKey || !hasCert) {
-      generateSelfSignedCerts(certsDir);
+    if (hasKey && hasCert) {
+      hasCerts = true;
+      console.log('    \ud83d\udd12 Usando certificados persistentes de', dataCertsDir);
     }
   }
 
-  // Ahora intentar leer
+  // 2. If no persistent certs, check image-baked certs and copy to persistent
+  if (!hasCerts && fs.existsSync(imageCertsDir)) {
+    const files = fs.readdirSync(imageCertsDir);
+    const hasKey = files.some(f => f.endsWith('-key.pem'));
+    const hasCert = files.some(f => f.endsWith('.pem') && !f.endsWith('-key.pem'));
+    if (hasKey && hasCert) {
+      // Copy image certs to persistent location so they survive image updates
+      try {
+        fs.mkdirSync(dataCertsDir, { recursive: true });
+        for (const file of files) {
+          fs.copyFileSync(path.join(imageCertsDir, file), path.join(dataCertsDir, file));
+        }
+        console.log('    \ud83d\udccb Certificados copiados a almacenamiento persistente:', dataCertsDir);
+        hasCerts = true;
+      } catch (copyErr) {
+        // Use image certs directly if copy fails
+        certsDir = imageCertsDir;
+        hasCerts = true;
+      }
+    }
+  }
+
+  // 3. If still no certs anywhere, generate new ones in persistent location
+  if (!hasCerts) {
+    generateSelfSignedCerts(dataCertsDir);
+    certsDir = dataCertsDir;
+  }
+
+  // Read certs from chosen directory
   if (!fs.existsSync(certsDir)) return null;
   const files = fs.readdirSync(certsDir);
   const keyFile = files.find(f => f.endsWith('-key.pem'));
