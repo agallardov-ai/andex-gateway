@@ -138,16 +138,20 @@ if not exist "%INSTALL_DIR%\.env" (
 )
 
 :: ══════════════════════════════════════
-:: CONSTRUIR Y LEVANTAR
+:: DESCARGAR IMAGEN Y LEVANTAR
 :: ══════════════════════════════════════
-echo  [4/4] Construyendo imagen Docker (puede tardar 1-2 min)...
+echo  [4/4] Descargando imagen Docker...
 cd /d "%INSTALL_DIR%"
-docker-compose -f docker-compose.prod.yml build --no-cache 2>&1
+docker-compose -f docker-compose.prod.yml pull 2>&1
 if %errorlevel% neq 0 (
-    echo.
-    echo  [ERROR] Fallo al construir la imagen Docker.
-    pause
-    exit /b 1
+    echo  [INFO] No se pudo descargar imagen, construyendo localmente...
+    docker-compose -f docker-compose.prod.yml build --no-cache 2>&1
+    if %errorlevel% neq 0 (
+        echo.
+        echo  [ERROR] Fallo al construir la imagen Docker.
+        pause
+        exit /b 1
+    )
 )
 
 echo.

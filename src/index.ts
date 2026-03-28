@@ -6,6 +6,7 @@ import fs from 'fs';
 import path from 'path';
 import net from 'net';
 import os from 'os';
+import { execSync } from 'child_process';
 import { fileURLToPath } from 'url';
 
 import { config } from './config/env.js';
@@ -25,12 +26,43 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const PROJECT_ROOT = path.resolve(__dirname, '..');
 
-// ===== TLS Certificate Discovery =====
+// ===== TLS Certificate Discovery + Auto-generation =====
+function generateSelfSignedCerts(certsDir: string): void {
+  console.log('    \ud83d\udd10 Generando certificados self-signed automáticamente...');
+  try {
+    fs.mkdirSync(certsDir, { recursive: true });
+    const keyPath = path.join(certsDir, 'localhost+2-key.pem');
+    const certPath = path.join(certsDir, 'localhost+2.pem');
+    execSync(
+      `openssl req -x509 -newkey rsa:2048 -nodes ` +
+      `-keyout "${keyPath}" -out "${certPath}" ` +
+      `-days 825 -subj "/CN=localhost/O=Andex Gateway" ` +
+      `-addext "subjectAltName=DNS:localhost,IP:127.0.0.1,IP:::1"`,
+      { stdio: 'pipe' }
+    );
+    console.log('    \u2705 Certificados self-signed generados en', certsDir);
+  } catch (err) {
+    console.warn('    \u26a0\ufe0f No se pudo generar certificados:', (err as Error).message);
+  }
+}
+
 function findTlsCerts(): { key: string; cert: string } | null {
   const certsDir = path.join(PROJECT_ROOT, 'certs');
 
-  if (!fs.existsSync(certsDir)) return null;
+  // Si no hay directorio o no hay certs, intentar generar
+  if (!fs.existsSync(certsDir)) {
+    generateSelfSignedCerts(certsDir);
+  } else {
+    const files = fs.readdirSync(certsDir);
+    const hasKey = files.some(f => f.endsWith('-key.pem'));
+    const hasCert = files.some(f => f.endsWith('.pem') && !f.endsWith('-key.pem'));
+    if (!hasKey || !hasCert) {
+      generateSelfSignedCerts(certsDir);
+    }
+  }
 
+  // Ahora intentar leer
+  if (!fs.existsSync(certsDir)) return null;
   const files = fs.readdirSync(certsDir);
   const keyFile = files.find(f => f.endsWith('-key.pem'));
   const certFile = files.find(f => f.endsWith('.pem') && !f.endsWith('-key.pem'));
@@ -154,10 +186,9 @@ async function start() {
     if (tlsCerts) {
       httpsServer = await buildServer(tlsCerts);
       await httpsServer.listen({ port: httpsPort, host: '0.0.0.0' });
-      console.log(`    \ud83d\udd12 HTTPS: https://localhost:${httpsPort} (mkcert)`);
+      console.log(`    \ud83d\udd12 HTTPS: https://localhost:${httpsPort}`);
     } else {
-      console.log(`    \u26a0\ufe0f  No TLS certs found in ./certs/ \u2014 HTTPS disabled`);
-      console.log(`       Run: mkdir -p certs && cd certs && mkcert localhost 127.0.0.1 ::1`);
+      console.log(`    \u26a0\ufe0f  HTTPS deshabilitado (no se pudieron generar certificados)`);
     }
 
     console.log(`
