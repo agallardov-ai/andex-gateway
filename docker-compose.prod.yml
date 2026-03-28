@@ -1,6 +1,6 @@
 # ANDEX GATEWAY - Docker Compose Produccion
 # Sin Orthanc. Para hospitales con su propio PACS.
-# Usa network_mode: host para acceso directo a red local.
+# Identico al gateway del docker-compose.yml original.
 #
 # Uso: docker-compose -f docker-compose.prod.yml up -d
 
@@ -9,13 +9,18 @@ services:
     build: .
     image: andex-gateway:latest
     container_name: andex-gateway
-    network_mode: host
+    ports:
+      - "${HTTP_PORT:-3001}:3001"
+      - "${HTTPS_PORT:-3443}:3443"
     env_file:
       - .env
     environment:
+      - NODE_ENV=production
       - STORAGE_PATH=/app/data
+      - HTTPS_PORT=3443
     volumes:
       - gateway-data:/app/data
+      - ./certs:/app/certs:ro
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:3001/health"]

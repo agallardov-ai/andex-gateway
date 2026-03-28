@@ -166,14 +166,14 @@ if %errorlevel% equ 0 (
     echo  ╔═══════════════════════════════════════════════╗
     echo  ║  [OK] GATEWAY FUNCIONANDO CORRECTAMENTE       ║
     echo  ║                                                ║
-    echo  ║  Dashboard: http://localhost:3001              ║
+    echo  ║  Dashboard: https://localhost:3443              ║
     echo  ║  Usuario:   admin                              ║
     echo  ║  Password:  admin123                           ║
     echo  ╚═══════════════════════════════════════════════╝
 ) else (
     echo.
     echo  [WARN] Gateway iniciando... puede tardar unos segundos mas.
-    echo  Abre http://localhost:3001 en tu navegador.
+    echo  Abre https://localhost:3443 en tu navegador.
 )
 
 echo.
