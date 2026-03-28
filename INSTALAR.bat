@@ -161,7 +161,35 @@ docker-compose -f docker-compose.prod.yml up -d 2>&1
 :: Esperar a que arranque
 echo.
 echo  Esperando que el gateway inicie...
-timeout /t 15 /nobreak >nul
+timeout /t 10 /nobreak >nul
+
+:: ══════════════════════════════════════
+:: AUTO-TRUST CERTIFICADO HTTPS
+:: ══════════════════════════════════════
+echo.
+echo  [SSL] Configurando certificado HTTPS de confianza...
+docker cp andex-gateway:/app/certs/localhost+2.pem "%INSTALL_DIR%\andex-cert.pem" >nul 2>&1
+if %errorlevel% equ 0 (
+    echo  [SSL] Certificado extraido del container
+    :: Importar al trust store de Windows (requiere admin)
+    certutil -addstore -f "Root" "%INSTALL_DIR%\andex-cert.pem" >nul 2>&1
+    if %errorlevel% equ 0 (
+        echo  [SSL] Certificado agregado a certificados de confianza de Windows
+        echo  [SSL] Chrome y Edge mostraran candado verde en https://localhost:3443
+    ) else (
+        echo  [SSL] No se pudo importar el certificado automaticamente.
+        echo  [SSL] Ejecuta este script como Administrador para auto-trust.
+        echo  [SSL] Mientras tanto, HTTPS funciona aceptando la advertencia del navegador.
+    )
+    :: Limpiar archivo temporal del cert
+    del "%INSTALL_DIR%\andex-cert.pem" >nul 2>&1
+) else (
+    echo  [SSL] No se pudo extraer el certificado del container.
+    echo  [SSL] HTTPS funciona pero el navegador mostrara advertencia.
+)
+
+:: Esperar un poco mas para health check
+timeout /t 5 /nobreak >nul
 
 :: Verificar salud
 docker exec andex-gateway wget -q -O- http://localhost:3001/health >nul 2>&1
@@ -173,6 +201,8 @@ if %errorlevel% equ 0 (
     echo  ║  Dashboard: https://localhost:3443              ║
     echo  ║  Usuario:   admin                              ║
     echo  ║  Password:  admin123                           ║
+    echo  ║                                                ║
+    echo  ║  HTTPS con candado verde (certificado trusted)  ║
     echo  ╚═══════════════════════════════════════════════╝
 ) else (
     echo.
