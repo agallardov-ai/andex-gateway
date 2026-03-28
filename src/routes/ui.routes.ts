@@ -8,15 +8,15 @@ export async function uiRoutes(fastify: FastifyInstance): Promise<void> {
   // Dashboard HTML (public — no auth required)
   fastify.get('/', {
     handler: async (request: FastifyRequest, reply: FastifyReply) => {
-      const orthancStatus = await checkPacsHealth();
+      const pacsStatus = await checkPacsHealth();
       const stats = getJobStats();
       const recentJobs = getJobs({ limit: 20 });
 
       const html = generateDashboardHtml({
         centroNombre: config.centroNombre,
-        orthancConnected: orthancStatus.ok,
-        orthancUrl: config.orthancUrl,
-        orthancVersion: orthancStatus.version,
+        pacsConnected: pacsStatus.ok,
+        pacsType: pacsStatus.type || config.pacsType,
+        pacsVersion: pacsStatus.version,
         stats,
         jobs: recentJobs,
         httpPort: config.port,
@@ -31,12 +31,12 @@ export async function uiRoutes(fastify: FastifyInstance): Promise<void> {
   // Dashboard API (for AJAX refresh, public)
   fastify.get('/dashboard/data', {
     handler: async (_request: FastifyRequest, reply: FastifyReply) => {
-      const orthancStatus = await checkPacsHealth();
+      const pacsStatus = await checkPacsHealth();
       const stats = getJobStats();
       const recentJobs = getJobs({ limit: 20 });
 
       return reply.send({
-        orthancConnected: orthancStatus.ok,
+        pacsConnected: pacsStatus.ok,
         stats,
         jobs: recentJobs,
         httpPort: config.port,
@@ -49,9 +49,9 @@ export async function uiRoutes(fastify: FastifyInstance): Promise<void> {
 
 interface DashboardData {
   centroNombre: string;
-  orthancConnected: boolean;
-  orthancUrl: string;
-  orthancVersion?: string;
+  pacsConnected: boolean;
+  pacsType: string;
+  pacsVersion?: string;
   httpPort: number;
   httpsPort: number;
   apiKey: string;
@@ -184,8 +184,8 @@ function generateDashboardHtml(data: DashboardData): string {
         <span>Gateway Online</span>
       </div>
       <div class="status-item">
-        <div class="status-dot ${data.orthancConnected ? 'ok' : 'error'}"></div>
-        <span>Orthanc ${data.orthancConnected ? 'Conectado' : 'Desconectado'}${data.orthancVersion ? ` (v${data.orthancVersion})` : ''}</span>
+        <div class="status-dot ${data.pacsConnected ? 'ok' : 'error'}"></div>
+        <span>PACS ${data.pacsConnected ? 'Conectado' : 'Desconectado'}${data.pacsVersion ? ` (${data.pacsVersion})` : ''}</span>
       </div>
     </div>
 
@@ -248,7 +248,7 @@ function generateDashboardHtml(data: DashboardData): string {
       </div>
       <div class="config-row" style="align-items: center;">
         <span class="config-label">🏥 PACS:</span>
-        <span class="config-value">${data.orthancUrl}</span>
+        <span class="config-value">${data.pacsType}</span>
       </div>
       <div class="config-row" style="align-items: center;">
         <span class="config-label">🔑 API Key:</span>
