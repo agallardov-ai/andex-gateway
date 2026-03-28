@@ -72,7 +72,7 @@ if %errorlevel% neq 0 (
 )
 
 :: ── Detener gateway si esta corriendo ──
-docker-compose -f "%INSTALL_DIR%\docker-compose.yml" down >nul 2>&1
+docker-compose -f "%INSTALL_DIR%\docker-compose.prod.yml" down >nul 2>&1
 
 :: ── Crear carpeta destino ──
 if not exist "%INSTALL_DIR%" mkdir "%INSTALL_DIR%"
@@ -142,7 +142,7 @@ if not exist "%INSTALL_DIR%\.env" (
 :: ══════════════════════════════════════
 echo  [4/4] Construyendo imagen Docker (puede tardar 1-2 min)...
 cd /d "%INSTALL_DIR%"
-docker-compose build --no-cache 2>&1
+docker-compose -f docker-compose.prod.yml build --no-cache 2>&1
 if %errorlevel% neq 0 (
     echo.
     echo  [ERROR] Fallo al construir la imagen Docker.
@@ -152,7 +152,7 @@ if %errorlevel% neq 0 (
 
 echo.
 echo  Iniciando Andex Gateway...
-docker-compose up -d 2>&1
+docker-compose -f docker-compose.prod.yml up -d 2>&1
 
 :: Esperar a que arranque
 echo.
@@ -178,7 +178,7 @@ if %errorlevel% equ 0 (
 
 echo.
 echo  Para ver logs:     docker-compose logs -f
-echo  Para detener:      docker-compose down
+echo  Para detener:      docker-compose -f docker-compose.prod.yml down
 echo  Para actualizar:   ejecuta este script de nuevo
 echo.
 pause

@@ -1,25 +1,18 @@
-# ╔═══════════════════════════════════════════════════════════════╗
-# ║  ANDEX GATEWAY — Docker Compose Producción                   ║
-# ║                                                               ║
-# ║  Para hospitales que YA tienen su propio PACS.                ║
-# ║  Solo despliega el Gateway (sin Orthanc).                     ║
-# ║                                                               ║
-# ║  Uso:                                                         ║
-# ║    1. Configurar .env con ./setup.sh                          ║
-# ║    2. docker-compose -f docker-compose.prod.yml up -d         ║
-# ╚═══════════════════════════════════════════════════════════════╝
+# ANDEX GATEWAY - Docker Compose Produccion
+# Sin Orthanc. Para hospitales con su propio PACS.
+# Usa network_mode: host para acceso directo a red local.
+#
+# Uso: docker-compose -f docker-compose.prod.yml up -d
 
 services:
   gateway:
     build: .
     image: andex-gateway:latest
     container_name: andex-gateway
-    ports:
-      - "${PORT:-3001}:3001"
+    network_mode: host
     env_file:
       - .env
     environment:
-      # Forzar storage dentro del container
       - STORAGE_PATH=/app/data
     volumes:
       - gateway-data:/app/data
