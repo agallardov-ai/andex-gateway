@@ -160,6 +160,137 @@ export async function nativeCEcho(cfg: DicomNativeConfig): Promise<CEchoResult> 
 }
 
 // =====================================================
+// C-STORE (Envio de archivos DICOM al PACS)
+// =====================================================
+
+export interface CStoreResult {
+  success: boolean;
+  latencyMs: number;
+  sopInstanceUid?: string;
+  error?: string;
+  details?: {
+    host: string;
+    port: number;
+    callingAeTitle: string;
+    calledAeTitle: string;
+    filepath: string;
+  };
+}
+
+/**
+ * Ejecuta un C-STORE SCU para enviar un archivo DICOM al PACS.
+ * Establece una asociacion DICOM completa y envia el archivo.
+ */
+export async function nativeCStore(
+  cfg: DicomNativeConfig,
+  filepath: string
+): Promise<CStoreResult> {
+  const timeout = cfg.timeout || 30000;
+  const startTime = Date.now();
+  const details = {
+    host: cfg.host,
+    port: cfg.port,
+    callingAeTitle: cfg.callingAeTitle,
+    calledAeTitle: cfg.calledAeTitle,
+    filepath,
+  };
+
+  try {
+    const dcmjsDimse = await getDcmjsDimse();
+    const { Client } = dcmjsDimse;
+    const { CStoreRequest } = dcmjsDimse.requests;
+    const { Status } = dcmjsDimse.constants;
+
+    return await new Promise<CStoreResult>((resolve) => {
+      let resolved = false;
+
+      const timer = setTimeout(() => {
+        if (!resolved) {
+          resolved = true;
+          resolve({
+            success: false,
+            latencyMs: Date.now() - startTime,
+            error: `Timeout (${timeout}ms) - el PACS no respondio al C-STORE`,
+            details,
+          });
+        }
+      }, timeout);
+
+      const client = new Client();
+      const request = new CStoreRequest(filepath);
+
+      request.on('response', (response: any) => {
+        clearTimeout(timer);
+        if (resolved) return;
+        resolved = true;
+
+        const status = response.getStatus();
+        if (status === Status.Success || status === 0x0000) {
+          // Intentar extraer SOPInstanceUID del dataset
+          let sopInstanceUid: string | undefined;
+          try {
+            sopInstanceUid = response.getAffectedSopInstanceUid?.();
+          } catch { /* ignore */ }
+
+          console.log(`[C-STORE] ✅ Enviado exitosamente a ${cfg.calledAeTitle}@${cfg.host}:${cfg.port} en ${Date.now() - startTime}ms`);
+          resolve({
+            success: true,
+            latencyMs: Date.now() - startTime,
+            sopInstanceUid,
+            details,
+          });
+        } else {
+          console.error(`[C-STORE] ❌ PACS respondio con status: 0x${status.toString(16)}`);
+          resolve({
+            success: false,
+            latencyMs: Date.now() - startTime,
+            error: `C-STORE respondio con status: 0x${status.toString(16)}`,
+            details,
+          });
+        }
+      });
+
+      client.on('networkError', (e: Error) => {
+        clearTimeout(timer);
+        if (resolved) return;
+        resolved = true;
+        console.error(`[C-STORE] ❌ Error de red: ${e.message}`);
+        resolve({
+          success: false,
+          latencyMs: Date.now() - startTime,
+          error: `Error de red: ${e.message}`,
+          details,
+        });
+      });
+
+      client.on('closed', () => {
+        clearTimeout(timer);
+        if (!resolved) {
+          resolved = true;
+          resolve({
+            success: false,
+            latencyMs: Date.now() - startTime,
+            error: 'Conexion cerrada inesperadamente',
+            details,
+          });
+        }
+      });
+
+      client.addRequest(request);
+      client.send(cfg.host, cfg.port, cfg.callingAeTitle, cfg.calledAeTitle);
+    });
+  } catch (error) {
+    console.error(`[C-STORE] ❌ Error inicializando: ${error instanceof Error ? error.message : String(error)}`);
+    return {
+      success: false,
+      latencyMs: Date.now() - startTime,
+      error: `Error inicializando C-STORE: ${error instanceof Error ? error.message : String(error)}`,
+      details,
+    };
+  }
+}
+
+// =====================================================
 // C-FIND MWL (Modality Worklist Query)
 // =====================================================
 
