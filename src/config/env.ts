@@ -38,10 +38,10 @@ export const config = {
   pacsToken: store.getOrEnv('pacsToken', 'PACS_TOKEN', ''),
 
   // ===== DICOM NATIVO (TCP) =====
-  gatewayAeTitle: store.getOrEnv('gatewayAeTitle', 'GATEWAY_AE_TITLE', 'ANDEX01'),
-  pacsDicomHost: store.getOrEnv('pacsDicomHost', 'PACS_DICOM_HOST', ''),
-  pacsDicomPort: store.getNumOrEnv('pacsDicomPort', 'PACS_DICOM_PORT', 104),
-  pacsAeTitle: store.getOrEnv('pacsAeTitle', 'PACS_AE_TITLE', ''),
+  gatewayAeTitle: store.getOrEnv('gatewayAeTitle', 'GATEWAY_AE_TITLE', '') || process.env.GATEWAY_AET || 'ANDEX01',
+  pacsDicomHost: store.getOrEnv('pacsDicomHost', 'PACS_DICOM_HOST', '') || process.env.PACS_HOST || '',
+  pacsDicomPort: store.getNumOrEnv('pacsDicomPort', 'PACS_DICOM_PORT', 0) || parseInt(process.env.PACS_PORT || '104', 10),
+  pacsAeTitle: store.getOrEnv('pacsAeTitle', 'PACS_AE_TITLE', '') || process.env.PACS_AET || '',
   gatewayDicomPort: store.getNumOrEnv('gatewayDicomPort', 'GATEWAY_DICOM_PORT', 11113),
 
   // ===== DICOMweb ENDPOINTS =====
