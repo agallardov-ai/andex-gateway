@@ -44,7 +44,7 @@ export interface OrthancResponse {
 
 export interface PacsStatus {
   status: 'ok' | 'error' | 'unknown';
-  type: 'orthanc' | 'dicomweb';
+  type: string;
   url: string;
   version?: string;
   capabilities?: string[];

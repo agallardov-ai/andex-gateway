@@ -15,7 +15,7 @@ export async function healthRoutes(fastify: FastifyInstance): Promise<void> {
     const stats = getJobStats();
     
     // Determine raw type for status
-    const rawPacsType = config.pacsType === 'dicomweb' ? 'dicomweb' : 'orthanc';
+    const rawPacsType = pacsInfo.type || config.pacsType;
     
     const health: HealthStatus = {
       gateway: {
