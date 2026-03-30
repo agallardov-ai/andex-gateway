@@ -2110,18 +2110,9 @@ function generateConfigHtml(): string {
           </div>
         </div>
         
-        <div class="form-row">
-          <div class="form-group">
-            <label>Modalidad por Defecto</label>
-            <input type="text" id="worklistDefaultModality" value="${currentConfig.worklistDefaultModality}" placeholder="ES">
-            <small>Modalidad DICOM para filtrar Worklist (ES=Endoscopia, US=Ultrasonido, CT, MR...)</small>
-          </div>
-          <div class="form-group">
-            <label>Worklist Station AE Title</label>
-            <input type="text" id="worklistStationAET" value="${currentConfig.worklistStationAET}" placeholder="(vacio = sin filtro)">
-            <small>AE Title de la estacion para filtrar la Worklist. Vacio = recibir todo.</small>
-          </div>
-        </div>
+        <!-- Filtros de Modalidad y AE Title removidos — se controlan desde la PWA -->
+        <input type="hidden" id="worklistDefaultModality" value="${currentConfig.worklistDefaultModality}">
+        <input type="hidden" id="worklistStationAET" value="${currentConfig.worklistStationAET}">
 
         <div class="form-group">
           <div class="checkbox-group">
