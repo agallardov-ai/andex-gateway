@@ -6,7 +6,7 @@
 
 import { config, syncConfig } from '../config/env.js';
 import { log } from './observability.service.js';
-import { queryWorklist, WorklistItem, WorklistQuery } from './worklist.service.js';
+import { queryWorklist, WorklistItem, WorklistQuery, getWorklistFilters } from './worklist.service.js';
 import { syncWorklistToSupabase, setLastSyncResult, getLastSyncStatus, SyncResult } from './sync.service.js';
 import { initSupabase, isSupabaseEnabled } from './supabase.service.js';
 
@@ -26,12 +26,13 @@ async function fetchTodayWorklist(): Promise<WorklistItem[]> {
     limit: 200
   };
 
-  // Aplicar filtros opcionales desde .env
-  if (config.worklistStationAET) {
-    params.stationAET = config.worklistStationAET;
+  // Aplicar filtros opcionales (live desde worklist config, no del config congelado)
+  const filters = getWorklistFilters();
+  if (filters.stationAET) {
+    params.stationAET = filters.stationAET;
   }
-  if (config.worklistDefaultModality) {
-    params.modality = config.worklistDefaultModality;
+  if (filters.defaultModality) {
+    params.modality = filters.defaultModality;
   }
 
 

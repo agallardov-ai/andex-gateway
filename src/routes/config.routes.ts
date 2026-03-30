@@ -110,6 +110,8 @@ export async function configRoutes(fastify: FastifyInstance): Promise<void> {
           upsPath: body.worklistUpsPath || config.worklistUpsPath,
           qidoMwlPath: body.worklistQidoMwlPath || config.worklistQidoMwlPath,
           preferUps: body.worklistPreferUps !== false,
+          defaultModality: body.worklistDefaultModality ?? config.worklistDefaultModality,
+          stationAET: body.worklistStationAET ?? config.worklistStationAET,
         });
       } catch (e) { /* non-critical */ }
       

@@ -82,6 +82,9 @@ interface WorklistConfig {
   qidoMwlPath: string;  // Path para QIDO-RS MWL (ej: /mwlitems)
   // Preferencia
   preferUps: boolean;   // true = usar UPS-RS, false = usar QIDO-RS MWL
+  // Filtros de Worklist
+  defaultModality?: string;   // Modalidad DICOM para filtrar (ES, US, CT...)
+  stationAET?: string;        // AE Title de la estación para filtrar
 }
 
 let worklistConfig: WorklistConfig = {
@@ -92,7 +95,9 @@ let worklistConfig: WorklistConfig = {
   token: config.pacsToken,
   upsPath: process.env.WORKLIST_UPS_PATH || '/workitems',
   qidoMwlPath: process.env.WORKLIST_QIDO_MWL_PATH || '/mwlitems',
-  preferUps: process.env.WORKLIST_PREFER_UPS !== 'false'  // Default: true
+  preferUps: process.env.WORKLIST_PREFER_UPS !== 'false',  // Default: true
+  defaultModality: config.worklistDefaultModality || '',
+  stationAET: config.worklistStationAET || '',
 };
 
 /**
@@ -100,7 +105,18 @@ let worklistConfig: WorklistConfig = {
  */
 export function configureWorklist(cfg: Partial<WorklistConfig>): void {
   worklistConfig = { ...worklistConfig, ...cfg };
-  console.log(`📋 Worklist configurado: ${worklistConfig.baseUrl} (${worklistConfig.preferUps ? 'UPS-RS' : 'QIDO-RS MWL'})`);
+  console.log(`📋 Worklist configurado: ${worklistConfig.baseUrl} (${worklistConfig.preferUps ? 'UPS-RS' : 'QIDO-RS MWL'}) modality=${worklistConfig.defaultModality || '*'} stationAET=${worklistConfig.stationAET || '*'}`);
+}
+
+/**
+ * Obtiene los filtros de worklist actuales (modality, stationAET)
+ * Usado por worklist-polling.service para aplicar filtros en vivo
+ */
+export function getWorklistFilters(): { defaultModality: string; stationAET: string } {
+  return {
+    defaultModality: worklistConfig.defaultModality || '',
+    stationAET: worklistConfig.stationAET || '',
+  };
 }
 
 /**
@@ -710,6 +726,8 @@ export function getWorklistConfig(): Omit<WorklistConfig, 'password' | 'token'> 
     username: worklistConfig.username,
     upsPath: worklistConfig.upsPath,
     qidoMwlPath: worklistConfig.qidoMwlPath,
-    preferUps: worklistConfig.preferUps
+    preferUps: worklistConfig.preferUps,
+    defaultModality: worklistConfig.defaultModality,
+    stationAET: worklistConfig.stationAET,
   };
 }
