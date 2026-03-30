@@ -7,6 +7,7 @@ import path from 'path';
 import net from 'net';
 import os from 'os';
 import { execSync } from 'child_process';
+import { generateSelfSignedCertNative } from './utils/generate-cert.js';
 import { fileURLToPath } from 'url';
 
 import { config } from './config/env.js';
@@ -28,19 +29,34 @@ const PROJECT_ROOT = path.resolve(__dirname, '..');
 
 // ===== TLS Certificate Discovery + Auto-generation =====
 function generateSelfSignedCerts(certsDir: string): void {
-  console.log('    \ud83d\udd10 Generando certificados self-signed automáticamente...');
+  console.log('    \ud83d\udd10 Generando certificados self-signed...');
   try {
     fs.mkdirSync(certsDir, { recursive: true });
     const keyPath = path.join(certsDir, 'localhost+2-key.pem');
     const certPath = path.join(certsDir, 'localhost+2.pem');
-    execSync(
-      `openssl req -x509 -newkey rsa:2048 -nodes ` +
-      `-keyout "${keyPath}" -out "${certPath}" ` +
-      `-days 825 -subj "/CN=localhost/O=Andex Gateway" ` +
-      `-addext "subjectAltName=DNS:localhost,IP:127.0.0.1,IP:::1"`,
-      { stdio: 'pipe' }
-    );
-    console.log('    \u2705 Certificados self-signed generados en', certsDir);
+
+    // Try openssl first (macOS/Linux), fallback to pure Node.js (Windows)
+    let generated = false;
+    try {
+      execSync(
+        `openssl req -x509 -newkey rsa:2048 -nodes ` +
+        `-keyout "${keyPath}" -out "${certPath}" ` +
+        `-days 825 -subj "/CN=localhost/O=Andex Gateway" ` +
+        `-addext "subjectAltName=DNS:localhost,IP:127.0.0.1,IP:::1"`,
+        { stdio: 'pipe' }
+      );
+      generated = true;
+      console.log('    \u2705 Certificados generados con openssl en', certsDir);
+    } catch {
+      console.log('    \u26a0\ufe0f openssl no disponible, usando generador Node.js nativo...');
+    }
+
+    if (!generated) {
+      const result = generateSelfSignedCertNative();
+      fs.writeFileSync(keyPath, result.key, { mode: 0o600 });
+      fs.writeFileSync(certPath, result.cert);
+      console.log('    \u2705 Certificados generados con Node.js nativo en', certsDir);
+    }
   } catch (err) {
     console.warn('    \u26a0\ufe0f No se pudo generar certificados:', (err as Error).message);
   }
