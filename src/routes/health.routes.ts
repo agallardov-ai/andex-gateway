@@ -33,6 +33,7 @@ export async function healthRoutes(fastify: FastifyInstance): Promise<void> {
       // Backwards compatible key for PWA
       orthanc: {
         status: pacsStatus.ok ? 'ok' : 'error',
+        type: rawPacsType,
         url: pacsInfo.url,
         version: pacsStatus.version,
         error: pacsStatus.error,

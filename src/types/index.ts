@@ -73,6 +73,7 @@ export interface HealthStatus {
   // Legacy orthanc field for backwards compatibility
   orthanc: {
     status: 'ok' | 'error' | 'unknown';
+    type?: string;
     url: string;
     version?: string;
     error?: string;
