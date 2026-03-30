@@ -14,6 +14,7 @@ import {
   getWorklistConfig,
   WorklistQuery 
 } from '../services/worklist.service.js';
+import { getCachedWorklist, refreshWorklistCache } from '../services/worklist-polling.service.js';
 import { config } from '../config/env.js';
 import { log } from '../services/observability.service.js';
 
@@ -30,6 +31,7 @@ interface WorklistQueryParams {
   stationAET?: string;
   limit?: string;
   offset?: string;
+  refresh?: string;
 }
 
 interface WorkitemStateBody {

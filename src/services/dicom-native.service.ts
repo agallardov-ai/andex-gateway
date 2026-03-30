@@ -312,6 +312,9 @@ export async function nativeCFindMWL(
     const { Status } = dcmjsDimse.constants;
 
     // Construir elementos de consulta MWL
+    // IMPORTANTE: Modality, Date y StationAET van DENTRO del
+    // ScheduledProcedureStepSequence (0040,0100) segun el estandar DICOM MWL.
+    // Si se ponen a nivel raiz, el PACS los ignora y devuelve todo.
     const queryElements: Record<string, any> = {};
 
     if (filters.patientID) {
@@ -323,15 +326,23 @@ export async function nativeCFindMWL(
     if (filters.accessionNumber) {
       queryElements.AccessionNumber = filters.accessionNumber;
     }
+
+    // Scheduled Procedure Step Sequence - filtros que van dentro de SPS
+    const spsFilters: Record<string, any> = {};
     if (filters.modality) {
-      queryElements.Modality = filters.modality;
+      spsFilters.Modality = filters.modality;
     }
     if (filters.date) {
-      queryElements.ScheduledProcedureStepStartDate = filters.date;
+      spsFilters.ScheduledProcedureStepStartDate = filters.date;
     }
     if (filters.scheduledStationAET) {
-      queryElements.ScheduledStationAETitle = filters.scheduledStationAET;
+      spsFilters.ScheduledStationAETitle = filters.scheduledStationAET;
     }
+    if (Object.keys(spsFilters).length > 0) {
+      queryElements.ScheduledProcedureStepSequence = spsFilters;
+    }
+
+    console.log('C-FIND MWL query:', JSON.stringify(queryElements));
 
     // Crear la request MWL (usa SopClass.ModalityWorklistInformationModelFind)
     const request = CFindRequest.createWorklistFindRequest(queryElements);
