@@ -607,13 +607,21 @@ export async function configRoutes(fastify: FastifyInstance): Promise<void> {
     }
   });
 
-  // POST /api/config/update-gateway - Pull latest image & recreate
+  // POST /api/config/update-gateway - Pull latest image & recreate container
   fastify.post('/api/config/update-gateway', {
     preHandler: dashboardAuth,
     handler: async (_request: FastifyRequest, reply: FastifyReply) => {
-      const cwd = process.env.COMPOSE_DIR || process.cwd();
+      const imageName = process.env.GATEWAY_IMAGE || 'ghcr.io/agallardov-ai/andex-gateway:latest';
+      const containerName = process.env.HOSTNAME || 'andex-gateway';
 
-      // Check if docker CLI is available
+      const runCmd = (cmd: string, args: string[]): Promise<{ ok: boolean; stdout: string; stderr: string }> =>
+        new Promise((resolve) => {
+          execFile(cmd, args, { timeout: 180_000 }, (err, stdout, stderr) => {
+            resolve({ ok: !err, stdout: stdout?.toString() || '', stderr: stderr?.toString() || '' });
+          });
+        });
+
+      // Check if docker CLI is available (needs socket mount)
       const dockerOk = await new Promise<boolean>((resolve) => {
         execFile('docker', ['--version'], (err) => resolve(!err));
       });
@@ -621,52 +629,64 @@ export async function configRoutes(fastify: FastifyInstance): Promise<void> {
         return reply.code(500).send({
           ok: false,
           error: 'Docker CLI no disponible en este entorno',
-          manual: 'Ejecute manualmente: docker compose pull gateway && docker compose up -d gateway',
+          manual: 'En PowerShell: docker compose pull gateway; docker compose up -d gateway',
+          manualBash: 'docker compose pull gateway && docker compose up -d gateway',
         });
       }
 
-      // Check compose file exists
-      const composeFile = ['docker-compose.yml', 'docker-compose.yaml', 'compose.yml', 'compose.yaml']
-        .map(f => path.join(cwd, f))
-        .find(f => fs.existsSync(f));
-      if (!composeFile) {
-        return reply.code(500).send({
-          ok: false,
-          error: `No se encontró docker-compose.yml en ${cwd}`,
-          manual: 'Ejecute manualmente: docker compose pull gateway && docker compose up -d gateway',
-        });
-      }
-
-      // Run docker compose pull
-      const runCmd = (cmd: string, args: string[]): Promise<{ ok: boolean; stdout: string; stderr: string }> =>
-        new Promise((resolve) => {
-          execFile(cmd, args, { cwd, timeout: 120_000 }, (err, stdout, stderr) => {
-            resolve({ ok: !err, stdout: stdout?.toString() || '', stderr: stderr?.toString() || '' });
-          });
-        });
-
-      const pull = await runCmd('docker', ['compose', 'pull', 'gateway']);
+      // Step 1: Pull latest image
+      const pull = await runCmd('docker', ['pull', imageName]);
       if (!pull.ok) {
         return reply.code(500).send({
           ok: false,
           step: 'pull',
           error: 'Error al descargar imagen',
           detail: pull.stderr || pull.stdout,
-          manual: 'docker compose pull gateway',
+          manual: `docker pull ${imageName}`,
         });
       }
 
-      // Run docker compose up -d gateway (this will restart ourselves)
-      const up = await runCmd('docker', ['compose', 'up', '-d', '--force-recreate', 'gateway']);
+      // Step 2: Tell Docker to restart this container with new image
+      // We use "docker compose up -d" if compose file is available, otherwise just signal
+      // Since we're inside the container, we try the Docker API approach:
+      // create+start a new container from the pulled image, replacing ourselves
+      
+      // Try finding compose project via labels on our own container
+      const inspect = await runCmd('docker', ['inspect', '--format', '{{index .Config.Labels "com.docker.compose.project.working_dir"}}', containerName]);
+      const composeDir = inspect.ok ? inspect.stdout.trim() : '';
+      
+      if (composeDir && composeDir !== '<no value>' && composeDir !== '') {
+        // We know the compose working dir on the host — use it
+        const composeFile = ['docker-compose.prod.yml', 'docker-compose.yml', 'compose.yml']
+          .map(f => `${composeDir}/${f}`);
+        
+        let upResult = { ok: false, stdout: '', stderr: 'No compose file found' };
+        for (const cf of composeFile) {
+          // Check if file exists on host via docker (hack: exec in host context isn't possible,
+          // but docker compose -f with host path works because docker CLI talks to host daemon)
+          const up = await runCmd('docker', ['compose', '-f', cf, 'up', '-d', '--force-recreate', 'gateway']);
+          if (up.ok || up.stderr.includes('Recreat') || up.stderr.includes('Started')) {
+            upResult = up;
+            break;
+          }
+        }
 
-      // If we get here, the container hasn't been replaced yet (or we're running outside Docker)
+        return reply.send({
+          ok: true,
+          pull: { stdout: pull.stdout.trim(), stderr: pull.stderr.trim() },
+          up: { ok: upResult.ok, stdout: upResult.stdout.trim(), stderr: upResult.stderr.trim() },
+          message: upResult.ok
+            ? '✅ Gateway actualizado — el contenedor se está recreando'
+            : '⚠️ Imagen descargada. Ejecute manualmente: docker compose up -d gateway',
+        });
+      }
+
+      // Fallback: no compose info — just report success on pull
       return reply.send({
         ok: true,
         pull: { stdout: pull.stdout.trim(), stderr: pull.stderr.trim() },
-        up: { ok: up.ok, stdout: up.stdout.trim(), stderr: up.stderr.trim() },
-        message: up.ok
-          ? '✅ Gateway actualizado — el contenedor se está recreando'
-          : '⚠️ Imagen descargada pero el contenedor no se pudo recrear. Ejecute: docker compose up -d gateway',
+        message: '✅ Imagen descargada. Reinicie el container: docker compose up -d gateway',
+        manual: 'docker compose up -d --force-recreate gateway',
       });
     }
   });
@@ -2671,7 +2691,8 @@ function generateConfigHtml(): string {
           resultDiv.innerHTML = '<div class="test-result" style="background:#fef2f2;border:1px solid #fca5a5;padding:12px;border-radius:8px;">'
             + '<div style="font-weight:700;margin-bottom:6px;">❌ ' + (data.error || 'Error') + '</div>'
             + (data.detail ? '<pre style="font-size:0.75rem;white-space:pre-wrap;color:#94a3b8;margin:6px 0;">' + data.detail + '</pre>' : '')
-            + (data.manual ? '<div style="margin-top:8px;font-size:0.85rem;">📋 Comando manual: <code>' + data.manual + '</code></div>' : '')
+            + (data.manual ? '<div style="margin-top:8px;font-size:0.85rem;">📋 <strong>PowerShell:</strong> <code>' + data.manual + '</code></div>' : '')
+            + (data.manualBash ? '<div style="margin-top:4px;font-size:0.85rem;">📋 <strong>Bash/CMD:</strong> <code>' + data.manualBash + '</code></div>' : '')
             + '</div>';
         }
       } catch (err) {

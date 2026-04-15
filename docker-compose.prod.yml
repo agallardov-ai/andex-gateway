@@ -20,6 +20,8 @@ services:
       - HTTPS_PORT=3443
     volumes:
       - gateway-data:/app/data
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./docker-compose.prod.yml:/app/docker-compose.prod.yml:ro
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:3001/health"]
