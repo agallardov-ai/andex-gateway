@@ -16,6 +16,7 @@ import { initStorage } from './services/storage.service.js';
 import { startRetryWorker, startCleanupWorker, stopWorkers } from './services/queue.service.js';
 import { startWorklistPolling, stopWorklistPolling } from './services/worklist-polling.service.js';
 import { startMonitoring, stopMonitoring } from './services/monitoring.service.js';
+import { startCloudQueuePoller, stopCloudQueuePoller } from './services/cloud-queue.service.js';
 import { dicomRoutes } from './routes/dicom.routes.js';
 import { healthRoutes } from './routes/health.routes.js';
 import { uiRoutes } from './routes/ui.routes.js';
@@ -196,6 +197,7 @@ async function shutdown() {
   stopWorkers();
   stopWorklistPolling();
   stopMonitoring();
+  stopCloudQueuePoller();
   if (httpServer) await httpServer.close();
   if (httpsServer) await httpsServer.close();
   process.exit(0);
@@ -226,6 +228,7 @@ async function start() {
     startCleanupWorker();
     startWorklistPolling();
     startMonitoring();
+    startCloudQueuePoller();
 
     // ---- HTTPS Server (port 3443 if certs exist) ----
     const tlsCerts = findTlsCerts();
