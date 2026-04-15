@@ -112,7 +112,7 @@ interface CloudJob {
   max_attempts: number;
 }
 
-async function processCloudJob(supabase: ReturnType<typeof getSupabase> & object, job: CloudJob): Promise<void> {
+async function processCloudJob(supabase: SupabaseClient, job: CloudJob): Promise<void> {
   const shortId = job.id.substring(0, 8);
   log('info', `Processing cloud job ${shortId}`, {
     patient: job.patient_name || job.patient_rut || 'unknown',
