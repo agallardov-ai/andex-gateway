@@ -8,8 +8,8 @@
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { config, supabaseConfig } from '../config/env.js';
-import { getSupabase, isSupabaseEnabled } from './supabase.service.js';
 import { uploadToPacs } from './pacs.service.js';
 import { log } from './observability.service.js';
 
@@ -18,6 +18,18 @@ const GATEWAY_ID = `gateway-${os.hostname()}`;
 
 let pollTimer: NodeJS.Timeout | null = null;
 let isProcessing = false;
+let cloudSupabase: SupabaseClient | null = null;
+
+function getCloudSupabase(): SupabaseClient | null {
+  if (cloudSupabase) return cloudSupabase;
+  const url = supabaseConfig.url;
+  const key = supabaseConfig.anonKey || supabaseConfig.serviceKey;
+  if (!url || !key) return null;
+  cloudSupabase = createClient(url, key, {
+    auth: { autoRefreshToken: false, persistSession: false },
+  });
+  return cloudSupabase;
+}
 
 // ========== Lifecycle ==========
 
@@ -27,8 +39,8 @@ export function startCloudQueuePoller(): void {
     return;
   }
 
-  if (!isSupabaseEnabled()) {
-    log('warn', 'Cloud queue skipped — Supabase not configured');
+  if (!getCloudSupabase()) {
+    log('warn', 'Cloud queue skipped — SUPABASE_URL + SUPABASE_ANON_KEY not set');
     return;
   }
 
@@ -57,7 +69,7 @@ async function pollQueue(): Promise<void> {
   isProcessing = true;
 
   try {
-    const supabase = getSupabase();
+    const supabase = getCloudSupabase();
     if (!supabase) return;
 
     const centroId = config.centroId;
