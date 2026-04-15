@@ -67,12 +67,7 @@ async function pollQueue(): Promise<void> {
     }
 
     const { data: jobs, error } = await supabase
-      .from('dicom_queue')
-      .select('*')
-      .eq('centro_id', centroId)
-      .eq('status', 'pending')
-      .order('created_at', { ascending: true })
-      .limit(5);
+      .rpc('gateway_poll_queue', { p_centro_id: centroId });
 
     if (error) {
       log('error', 'Error querying dicom_queue', { error: error.message });
@@ -114,9 +109,12 @@ async function processCloudJob(supabase: ReturnType<typeof getSupabase> & object
 
   // Mark as processing
   await supabase
-    .from('dicom_queue')
-    .update({ status: 'processing', processed_by: GATEWAY_ID, attempts: job.attempts + 1 })
-    .eq('id', job.id);
+    .rpc('gateway_update_job', {
+      p_job_id: job.id,
+      p_status: 'processing',
+      p_gateway_id: GATEWAY_ID,
+      p_attempts: job.attempts + 1,
+    });
 
   // Temp dir for downloaded files
   const tmpDir = path.join(os.tmpdir(), `andex-cloud-${job.id}`);
@@ -173,16 +171,23 @@ async function processCloudJob(supabase: ReturnType<typeof getSupabase> & object
     // Update job status
     if (sent > 0 && failed === 0) {
       await supabase
-        .from('dicom_queue')
-        .update({ status: 'sent', sent_at: new Date().toISOString(), error_message: null })
-        .eq('id', job.id);
+        .rpc('gateway_update_job', {
+          p_job_id: job.id,
+          p_status: 'sent',
+          p_gateway_id: GATEWAY_ID,
+          p_attempts: job.attempts + 1,
+        });
       log('info', `  Job ${shortId} complete: ${sent} files sent to PACS`);
     } else if (sent > 0) {
       // Partial — leave as pending for retry
       await supabase
-        .from('dicom_queue')
-        .update({ status: 'pending', error_message: `Partial: ${sent}/${sent + failed} sent` })
-        .eq('id', job.id);
+        .rpc('gateway_update_job', {
+          p_job_id: job.id,
+          p_status: 'pending',
+          p_gateway_id: GATEWAY_ID,
+          p_attempts: job.attempts + 1,
+          p_error: `Partial: ${sent}/${sent + failed} sent`,
+        });
       log('warn', `  Job ${shortId} partial: ${sent}/${sent + failed}`);
     } else {
       throw new Error(`All files failed (${failed} errors)`);
@@ -193,9 +198,13 @@ async function processCloudJob(supabase: ReturnType<typeof getSupabase> & object
 
     const newStatus = (job.attempts + 1) >= job.max_attempts ? 'failed' : 'pending';
     await supabase
-      .from('dicom_queue')
-      .update({ status: newStatus, error_message: msg })
-      .eq('id', job.id);
+      .rpc('gateway_update_job', {
+        p_job_id: job.id,
+        p_status: newStatus,
+        p_gateway_id: GATEWAY_ID,
+        p_attempts: job.attempts + 1,
+        p_error: msg,
+      });
 
     if (newStatus === 'failed') {
       log('error', `  Job ${shortId} exhausted retries (${job.max_attempts})`);
