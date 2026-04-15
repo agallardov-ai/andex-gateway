@@ -18,8 +18,8 @@ FROM node:20-alpine
 WORKDIR /app
 
 # Install openssl for self-signed cert generation
-# Install docker CLI for self-update via dashboard button
-RUN apk add --no-cache openssl docker-cli docker-cli-compose
+# Install docker CLI for self-update via dashboard button (compose plugin included)
+RUN apk add --no-cache openssl docker-cli
 
 # Install production dependencies only
 COPY package*.json ./
